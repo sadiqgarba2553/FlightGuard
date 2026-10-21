@@ -13,6 +13,6 @@ for profile in sorted({r['family'] for r in rows}):
     licences={a['License'] for a in assets}
     if any('GPL' in licence for licence in licences):notices.append(dict(Name='LICENSE-GPL-2.txt',Content=gpl+'\nIndividual clips follow the version applicability in ATTRIBUTION.md and the catalog.'))
     if any('CC-BY' in licence for licence in licences):notices.append(dict(Name='LICENSE-CC-BY-NC-SA-4.txt',Content=cc))
-    packs.append(dict(Profile=profile,Version='0.5-pinned',Assets=assets,Notices=notices,Note='Pinned source revision, SHA-256 and licence recorded. Exact OEM voice authenticity is not independently certified. Shared fallback recordings remain labelled in the library.'))
+    packs.append(dict(Profile=profile,Version='0.6-pinned',Assets=assets,Notices=notices,Note='Pinned source revision, SHA-256 and licence recorded. Exact OEM voice authenticity is not independently certified. Shared fallback recordings remain labelled in the library.'))
 (app/'pack-catalog.json').write_text(json.dumps(dict(Schema=1,Packs=packs),indent=2),encoding='utf-8')
 print(f'Catalog built: {len(packs)} packs, {sum(len(p["Assets"]) for p in packs)} downloadable clips')

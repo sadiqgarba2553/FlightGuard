@@ -1,0 +1,22 @@
+using System;
+using System.Linq;
+namespace FlightGuard;
+public static class ForwardTerrainTests
+{
+    private static Frame F()=>new(){Aircraft="757-200",Time=DateTime.UtcNow,Latitude=39,Longitude=-105,Agl=1000,Msl=1000,GroundSpeedKnots=180,Ias=180,GearDown=true,GearState=1,Flaps=3,FlapStops=new[]{new FlapStop(0,"UP",0),new FlapStop(3,"30",30)}};
+    public static void Run(Action<string,Action> test){
+        void Check(bool value,string message="Forward terrain assertion failed"){if(!value)throw new Exception(message);}
+        test("Terrain PNG encoding and equatorial tile coordinates decode correctly",()=>{Check(Math.Abs(TerrainTiles.Decode(128,100,0)-328.0839895)<.001);var c=TerrainTiles.Cell(new(0,0));Check(c.X==2048&&c.Y==2048&&c.PixelX==0&&c.PixelY==0);Check(TerrainTiles.Cell(new(0,180)).X==0);});
+        test("Forward caution sees rising terrain while current AGL remains high",()=>{var a=TerrainPrediction.Evaluate(F(),90,new[]{new TerrainSample(0,0),new TerrainSample(50,800)},false,"fixture");Check(a.Alert=="terrain-ahead"&&a.ConflictSeconds==50);});
+        test("Forward pull-up warns before the aircraft reaches a ridge",()=>{var a=TerrainPrediction.Evaluate(F(),90,new[]{new TerrainSample(0,0),new TerrainSample(20,950)},false,"fixture");Check(a.Alert=="terrain-ahead-pull-up"&&a.ConflictSeconds==20);});
+        test("Configured normal touchdown on flat terrain is not a forward obstacle",()=>{var f=F() with{Agl=300,Msl=300,Vs=-600};var a=TerrainPrediction.Evaluate(f,90,new[]{new TerrainSample(0,0),new TerrainSample(20,0),new TerrainSample(30,0),new TerrainSample(40,0)},true,"fixture");Check(a.Alert=="");});
+        test("A climb that clears the ridge does not get a terrain-ahead alert",()=>{var a=TerrainPrediction.Evaluate(F() with{Vs=2000},90,new[]{new TerrainSample(0,0),new TerrainSample(20,950)},false,"fixture");Check(a.Alert=="");});
+        test("Terrain mismatch is explicitly unavailable, rather than a fabricated warning",()=>{var a=TerrainPrediction.Evaluate(F() with{Msl=2000},90,new[]{new TerrainSample(0,0),new TerrainSample(20,950)},false,"fixture");Check(!a.Available&&a.Alert==""&&!a.ValidFor(F()));});
+        test("Stale wrong-aircraft and changed-flight-path predictions are rejected",()=>{var f=F();var a=TerrainPrediction.Evaluate(f,90,new[]{new TerrainSample(0,0),new TerrainSample(20,950)},false,"fixture");Check(a.ValidFor(f));Check(!a.ValidFor(f with{Time=f.Time.AddSeconds(4)}));Check(!a.ValidFor(f with{Aircraft="A380-800"}));Check(!a.ValidFor(f with{Vs=2000}));Check(!a.ValidFor(f with{Latitude=50}));});
+        test("Forward assessment creates immediate priority warning with explanation",()=>{var f=F();var a=TerrainPrediction.Evaluate(f,90,new[]{new TerrainSample(0,0),new TerrainSample(20,950)},false,"fixture");var e=new WarningEngine();e.Update(f,new(),"Boeing",false);var calls=e.Update(f with{Time=f.Time.AddSeconds(.1)},new(),"Boeing",false,a);Check(calls.Any(c=>c.Id=="terrain-ahead-pull-up")&&e.WarningReason.Contains("20 s"));});
+        test("Disabled or replayed forward terrain never makes a network request",()=>{using var service=new ForwardTerrainService(System.IO.Path.Combine(System.IO.Path.GetTempPath(),"FlightGuard-unused-cache"));Check(service.Observe(F(),new(),true)==null);Check(service.Observe(F(),new(){ForwardTerrain=false},false)==null);});
+        test("Geodesic ground track handles the antimeridian and turn wrap",()=>{var a=new GeoPoint(0,179.99);var b=Geo.Destination(a,90,3000);Check(b.Longitude<0);Check(Math.Abs(Geo.Distance(a,b)-3000)<1);Check(Math.Abs(Geo.Bearing(a,b)-90)<.1);Check(Geo.Turn(359,1)==2);});
+        test("Persistent warnings queue one fresh repeat without interrupting themselves",()=>{var q=new CueQueue();var t=DateTime.UtcNow;var cue=Catalog.Get("terrain-ahead-pull-up");Check(!q.Offer(new[]{cue},t,cue,t));Check(q.Count==1);q.Offer(new[]{cue},t.AddSeconds(1.2),cue,t);Check(q.Count==1&&q.Next(t.AddSeconds(1.8))?.Cue.Id==cue.Id);q.Offer(new[]{cue},t.AddSeconds(2),cue,t);q.WarningState("");Check(q.Count==0);});
+        test("Earlier default gear and flap gates and repeated reminders are active",()=>{var s=new Settings();Check(s.GearHeight==800&&s.FlapsHeight==500);var e=new WarningEngine();var t=DateTime.UtcNow;int count=0;for(int i=0;i<80;i++)count+=e.Update(F() with{Time=t.AddSeconds(i*.1),Agl=700-i*.5,Msl=700-i*.5,Vs=-300,GearDown=false,GearState=2},s,"Boeing",false).Count(c=>c.Id=="too-low-gear");Check(count>=4);});
+    }
+}

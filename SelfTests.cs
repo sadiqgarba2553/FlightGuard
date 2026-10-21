@@ -85,7 +85,7 @@ public static class SelfTests
         Test("Catalog IDs unique", () => Assert(Catalog.All.Select(x=>x.Id).Distinct().Count()==Catalog.All.Count));
         Test("Bank angle warning follows sustained excessive bank",()=>{var next=Sequence(new());next(Frame() with{Bank=50});var a=new List<SoundCue>();for(int i=0;i<10;i++)a.AddRange(next(Frame() with{Bank=50}));Assert(a.Any(c=>c.Id=="bank-angle"));});
         Test("Don't sink uses altitude lost after observed takeoff",()=>{var next=Sequence(new());next(Frame(5,0,150,true));next(Frame(50,900));next(Frame(150,900));var a=new List<SoundCue>();for(int i=0;i<10;i++)a.AddRange(next(Frame(120-i,-400)));Assert(a.Any(c=>c.Id=="dont-sink"));});
-        Test("Terrain closure detects rising terrain under the aircraft",()=>{var next=Sequence(new());next(Frame(1000,-300));var a=new List<SoundCue>();for(int i=0;i<20;i++)a.AddRange(next(Frame(975-i*25,-300)));Assert(a.Any(c=>c.Id=="terrain"));});
+        Test("Terrain closure detects rising terrain under the aircraft",()=>{var next=Sequence(new());next(Frame(1000,-300));var a=new List<SoundCue>();for(int i=0;i<20;i++)a.AddRange(next(Frame(975-i*25,-300) with{Msl=1099-i}));Assert(a.Any(c=>c.Id=="terrain"));});
         Test("Normal configured descent does not raise terrain warning",()=>{var next=Sequence(new());next(Frame(1000,-1000));var a=new List<SoundCue>();for(int i=0;i<20;i++)a.AddRange(next(Frame(997-i*3.3333,-1000)));Assert(!a.Any(c=>c.Id=="terrain"));});
         Test("Known fixed-gear aircraft cannot raise too-low-gear",()=>{var next=Sequence(new());next(Frame(400) with{Aircraft="Cessna 172",GearDown=false});var a=new List<SoundCue>();for(int i=0;i<10;i++)a.AddRange(next(Frame(395-i*3) with{Aircraft="Cessna 172",GearDown=false}));Assert(!a.Any(c=>c.Id=="too-low-gear"));});
         Test("Takeoff callouts re-arm after an aborted roll",()=>{var next=Sequence(new());next(Frame(5,0,134,true));next(Frame(5,0,136,true));next(Frame(5,0,20,true));next(Frame(5,0,134,true));Assert(next(Frame(5,0,136,true)).Any(c=>c.Id=="v1"));});
@@ -109,7 +109,7 @@ public static class SelfTests
         Test("Fragmented TCP server: altitude feet, speed SI, read-only requests", () => ProtocolTest().GetAwaiter().GetResult());
         Test("Connect 500-ft AGL stays 500 ft, not 1640 ft", () => ProtocolTest(500f,1500f).GetAwaiter().GetResult());
         Test("Connect 50-ft AGL stays 50 ft near touchdown", () => ProtocolTest(50f,1050f).GetAwaiter().GetResult());
-        PhaseTests.Run(Test);FeatureTests.Run(Test);CabinTests.Run(Test);
+        PhaseTests.Run(Test);FeatureTests.Run(Test);CabinTests.Run(Test);GpwsContextTests.Run(Test);ForwardTerrainTests.Run(Test);
         results.Insert(0, $"FlightGuard self-tests: {passed} passed, {failed} failed · {DateTime.UtcNow:O}");
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(output))!);File.WriteAllLines(output,results);
         return failed==0?0:1;
@@ -121,11 +121,14 @@ public static class SelfTests
         var server = new TcpListener(IPAddress.Loopback,10112);server.Start();
         var states = new (string Path,int Type,object Value)[] {
             ("aircraft/0/name",4,"Boeing 777"),("infiniteflight/app_state",4,"Playing"),
+            ("aircraft/0/latitude",3,47.4d),("aircraft/0/longitude",3,-122.3d),
             ("aircraft/0/altitude_agl",2,agl),("aircraft/0/altitude_msl",2,msl),("aircraft/0/indicated_airspeed",2,100f),
             ("aircraft/0/vertical_speed",2,-5f),("aircraft/0/bank",2,.1f),("aircraft/0/is_on_ground",0,false),
             ("aircraft/0/groundspeed",2,100f),("aircraft/0/systems/engines/engine_count",1,2),
             ("aircraft/0/systems/engines/0/reverse",0,true),("aircraft/0/systems/engines/1/reverse",0,false),
-            ("aircraft/0/systems/spoilers/position",2,1f)
+            ("aircraft/0/systems/spoilers/position",2,1f),
+            ("aircraft/0/configuration/flaps/0/name",4,"UP"),("aircraft/0/configuration/flaps/0/angle",2,0f),
+            ("aircraft/0/configuration/flaps/1/name",4,"FULL"),("aircraft/0/configuration/flaps/1/angle",2,40f)
         };
         string manifest=string.Join("\n",states.Select((s,i)=>$"{700+i},{s.Type},{s.Path}"));
         var serverTask=Task.Run(async()=>{
@@ -134,7 +137,7 @@ public static class SelfTests
                 byte[] req=new byte[5];await ns.ReadExactlyAsync(req,timeout.Token);if(req[4]!=0)throw new Exception("Client sent a write command");
                 int id=BinaryPrimitives.ReadInt32LittleEndian(req); byte[] body;
                 if(id==-1)body=StringBytes(manifest);
-                else {var st=states[id-700];body=st.Type==4?StringBytes((string)st.Value):st.Type==0?new[]{(byte)((bool)st.Value?1:0)}:st.Type==1?BitConverter.GetBytes((int)st.Value):BitConverter.GetBytes((float)st.Value);}
+                else {var st=states[id-700];body=st.Type==4?StringBytes((string)st.Value):st.Type==0?new[]{(byte)((bool)st.Value?1:0)}:st.Type==1?BitConverter.GetBytes((int)st.Value):st.Type==3?BitConverter.GetBytes((double)st.Value):BitConverter.GetBytes((float)st.Value);}
                 byte[] header=new byte[8];BinaryPrimitives.WriteInt32LittleEndian(header,id);BinaryPrimitives.WriteInt32LittleEndian(header.AsSpan(4),body.Length);
                 // Arbitrary fragmentation tests that neither headers nor strings assume one network read.
                 foreach(byte b in header.Concat(body))await ns.WriteAsync(new[]{b},timeout.Token);
@@ -145,7 +148,7 @@ public static class SelfTests
             Frame? received=null;using var polling=CancellationTokenSource.CreateLinkedTokenSource(timeout.Token);
             try { await client.Poll(f=>{received=f;polling.Cancel();},_=>{},polling.Token); } catch(OperationCanceledException) when(received!=null){}
             await serverTask;
-            if(received==null||Math.Abs(received.Agl-agl)>.001||Math.Abs(received.Msl-msl)>.001||Math.Abs(received.Ias-194.3844492)>.001||Math.Abs(received.Vs+984.2519685)>.001||Math.Abs(received.Bank-5.72957795)>.001||Math.Abs((received.GroundSpeedKnots??0)-194.3844492)>.001||received.EngineCount!=2||received.EngineReverse[0]!=true||received.EngineReverse[1]!=false||received.EngineReverse[2]!=null||received.SpoilerPosition!=1)throw new Exception("Telemetry conversion failed");
+            if(received==null||received.Latitude!=47.4d||received.Longitude!=-122.3d||Math.Abs(received.Agl-agl)>.001||Math.Abs(received.Msl-msl)>.001||Math.Abs(received.Ias-194.3844492)>.001||Math.Abs(received.Vs+984.2519685)>.001||Math.Abs(received.Bank-5.72957795)>.001||Math.Abs((received.GroundSpeedKnots??0)-194.3844492)>.001||received.EngineCount!=2||received.EngineReverse[0]!=true||received.EngineReverse[1]!=false||received.EngineReverse[2]!=null||received.SpoilerPosition!=1||received.FlapStops.Length!=2||received.FlapStops[1].Name!="FULL"||received.FlapStops[1].Angle!=40)throw new Exception("Telemetry conversion failed");
         } finally {server.Stop();}
     }
 }

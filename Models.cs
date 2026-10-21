@@ -19,8 +19,11 @@ public sealed class Settings
     public double PullUpRate { get; set; } = 2500;
     public double TerrainSeconds { get; set; } = 12;
     public double BankAngle { get; set; } = 40;
-    public double GearHeight { get; set; } = 500;
-    public double FlapsHeight { get; set; } = 200;
+    public double GearHeight { get; set; } = 800;
+    public double FlapsHeight { get; set; } = 500;
+    public bool ForwardTerrain {get;set;}=true;
+    public int TerrainLookAheadSeconds {get;set;}=60;
+    public int GpwsLandingFlapState {get;set;}=-1;
     public bool Warnings { get; set; } = true;
     public bool Heights { get; set; } = true;
     public bool Crew { get; set; } = true;
@@ -55,6 +58,8 @@ public sealed class Settings
             throw new ArgumentException("Terrain closure must be 3–30 seconds and bank threshold 10–75 degrees.");
         if (!double.IsFinite(GearHeight) || GearHeight < 50 || GearHeight > 1500 || !double.IsFinite(FlapsHeight) || FlapsHeight < 50 || FlapsHeight > 1000)
             throw new ArgumentException("Gear height must be 50–1500 ft; flap height 50–1000 ft.");
+        if(GpwsLandingFlapState< -1||GpwsLandingFlapState>20)throw new ArgumentException("GPWS landing flap state must be -1 (automatic) or a stop index 0–20.");
+        if(TerrainLookAheadSeconds<15||TerrainLookAheadSeconds>90)throw new ArgumentException("Terrain look-ahead must be 15–90 seconds.");
         if(PollMilliseconds<50 || PollMilliseconds>500 || CalloutLeadMilliseconds<0 || CalloutLeadMilliseconds>250) throw new ArgumentException("Polling must be 50–500 ms; timing compensation 0–250 ms.");
         if(Profile!="Auto"&&!Catalog.Profiles.Contains(Profile))throw new ArgumentException("Select Auto or a listed aircraft/manufacturer sound profile.");
         Approach ??=new(); Approach.Validate(); Cabin ??=new();Cabin.Validate();
@@ -86,6 +91,7 @@ public static class Catalog
     {
         var a = new List<SoundCue> {
             new("pull-up", "Pull up, pull up", "Warnings", 100), new("terrain", "Terrain, terrain", "Warnings", 90),
+            new("terrain-ahead", "Terrain ahead", "Warnings", 90),new("terrain-ahead-pull-up", "Terrain ahead · pull up", "Warnings", 100),
             new("sink-rate", "Sink rate", "Warnings", 80), new("dont-sink", "Don't sink", "Warnings", 80),
             new("too-low-terrain", "Too low, terrain", "Warnings", 85), new("too-low-gear", "Too low, gear", "Warnings", 75),
             new("too-low-flaps", "Too low, flaps", "Warnings", 70), new("bank-angle", "Bank angle, bank angle", "Warnings", 75),
@@ -149,8 +155,8 @@ public static class Catalog
     }
     public static bool FixedGear(string name)
     {
-        string n = name.ToUpperInvariant().Replace(" ", "");
-        return n.Contains("CESSNA172") || n.Contains("CESSNA208") || n.Contains("SR22") || n.Contains("XCUB") || n.Contains("PA28") || n.Contains("ARCHER");
+        string n = System.Text.RegularExpressions.Regex.Replace(name.ToUpperInvariant(),"[^A-Z0-9]","");
+        return n.Contains("CESSNA172") || n.Contains("CESSNA208") || n.StartsWith("C172") || n.StartsWith("C208") || n.Contains("SR22") || n.Contains("XCUB") || n.Contains("PA28") || n.Contains("ARCHER");
     }
 }
 
@@ -161,6 +167,8 @@ public sealed record Frame
     public string AppState { get; init; } = "Playing";
     public double Agl { get; init; }
     public double Msl { get; init; }
+    public double? Latitude {get;init;}
+    public double? Longitude {get;init;}
     public double Ias { get; init; }
     public double Vs { get; init; }
     public double Bank { get; init; }
@@ -175,9 +183,11 @@ public sealed record Frame
     public bool?[] EngineReverse {get;init;}=Array.Empty<bool?>();
     public bool? ParkingBrake { get; init; }
     public int? Flaps { get; init; }
+    public FlapStop[] FlapStops {get;init;}=Array.Empty<FlapStop>();
+    private bool ValidFlapStops=>FlapStops!=null&&FlapStops.Length<=21&&FlapStops.All(s=>s!=null&&s.State>=0&&s.State<=20&&s.Name!=null&&s.Name.Length<=160&&(s.Angle==null||double.IsFinite(s.Angle.Value)))&&FlapStops.Select(s=>s.State).Distinct().Count()==FlapStops.Length;
     public bool? Autopilot { get; init; }
     public bool? Stall { get; init; }
     public bool? Overspeed { get; init; }
-    public bool Usable => EngineReverse!=null && EngineReverse.Length<=8 && (GroundSpeedKnots==null || double.IsFinite(GroundSpeedKnots.Value)&&GroundSpeedKnots>=0&&GroundSpeedKnots<2500) && (SpoilerPosition==null || double.IsFinite(SpoilerPosition.Value)) && double.IsFinite(SampleLatencyMilliseconds) &&  double.IsFinite(Agl) && double.IsFinite(Msl) && double.IsFinite(Ias) && double.IsFinite(Vs) && double.IsFinite(Bank) && Agl >= -50 && Agl < 200000 && Ias >= 0 && Ias < 2500 && Math.Abs(Vs) < 100000;
+    public bool Usable => (Latitude==null||double.IsFinite(Latitude.Value)&&Math.Abs(Latitude.Value)<=90)&&(Longitude==null||double.IsFinite(Longitude.Value)&&Math.Abs(Longitude.Value)<=180)&&ValidFlapStops && EngineReverse!=null && EngineReverse.Length<=8 && (GroundSpeedKnots==null || double.IsFinite(GroundSpeedKnots.Value)&&GroundSpeedKnots>=0&&GroundSpeedKnots<2500) && (SpoilerPosition==null || double.IsFinite(SpoilerPosition.Value)) && double.IsFinite(SampleLatencyMilliseconds) &&  double.IsFinite(Agl) && double.IsFinite(Msl) && double.IsFinite(Ias) && double.IsFinite(Vs) && double.IsFinite(Bank) && Agl >= -50 && Agl < 200000 && Ias >= 0 && Ias < 2500 && Math.Abs(Vs) < 100000;
     public bool Active => AppState.Equals("Playing", StringComparison.OrdinalIgnoreCase) || AppState.Equals("Flying", StringComparison.OrdinalIgnoreCase);
 }

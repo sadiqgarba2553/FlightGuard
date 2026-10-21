@@ -9,6 +9,7 @@ using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Text.RegularExpressions;
 
 namespace FlightGuard;
 
@@ -103,6 +104,7 @@ public sealed class ConnectClient : IDisposable
         return values;
     }
     public static readonly Dictionary<string, string[]> Paths = new() {
+        ["latitude"]=new[]{"aircraft/0/latitude"},["longitude"]=new[]{"aircraft/0/longitude"},
         ["groundspeed"]=new[]{"aircraft/0/groundspeed"},
         ["engineCount"]=new[]{"aircraft/0/systems/engines/engine_count"},
         ["reverse0"]=new[]{"aircraft/0/systems/engines/0/reverse"},["reverse1"]=new[]{"aircraft/0/systems/engines/1/reverse"},
@@ -120,9 +122,18 @@ public sealed class ConnectClient : IDisposable
         ["overspeed"] = new[] {"aircraft/0/is_over_speed_warning_on", "aircraft/0/warning_overspeed"}
     };
     public Dictionary<string, StateEntry> Resolve() => Paths.Select(kv => (kv.Key, Entry: kv.Value.Select(p => Manifest.GetValueOrDefault(p)).FirstOrDefault(x => x != null))).Where(x => x.Entry != null).ToDictionary(x => x.Key, x => x.Entry!);
+    private async Task<FlapStop[]> FlapDefinitions(CancellationToken token)
+    {
+        var entries=new Dictionary<string,StateEntry>();
+        foreach(var entry in Manifest.Values){var m=Regex.Match(entry.Path,@"^aircraft/0/configuration/flaps/(\d+)/(name|shortname|angle)$");if(m.Success&&int.Parse(m.Groups[1].Value)<=20)entries[m.Groups[1].Value+":"+m.Groups[2].Value]=entry;}
+        if(entries.Count==0)return Array.Empty<FlapStop>();
+        var values=await RequestBatch(entries,token);
+        return entries.Keys.Select(k=>int.Parse(k.Split(':')[0])).Distinct().OrderBy(i=>i).Select(i=>new FlapStop(i,values.GetValueOrDefault(i+":name")?.ToString()??values.GetValueOrDefault(i+":shortname")?.ToString()??"State "+i,values.TryGetValue(i+":angle",out var a)?Convert.ToDouble(a):null)).ToArray();
+    }
     public async Task Poll(Action<Frame> onFrame, Action<string> onInfo, CancellationToken token, int intervalMilliseconds = 80)
     {
         var selected = Resolve();
+        var flapStops=await FlapDefinitions(token);
         foreach (string required in new[] {"agl", "msl", "ias", "vs", "bank", "ground", "app"})
             if (!selected.ContainsKey(required)) throw new InvalidDataException("Required state missing: " + required + ". Warnings cannot run on this manifest.");
         onInfo("Manifest: " + Manifest.Count + " states; " + selected.Count + " monitored. Missing optional: " + string.Join(", ", Paths.Keys.Except(selected.Keys)));
@@ -143,12 +154,13 @@ public sealed class ConnectClient : IDisposable
                 Aircraft = name, AppState = values["app"].ToString() ?? "Unknown",
                 // Connect altitude_agl and altitude_msl are already feet. Speed states use metres/second.
                 Agl = Num("agl"), Msl = Num("msl"),
+                Latitude=values.TryGetValue("latitude",out var latitude)?Convert.ToDouble(latitude):null,Longitude=values.TryGetValue("longitude",out var longitude)?Convert.ToDouble(longitude):null,
                 Ias = Num("ias") * 1.943844492, Vs = Num("vs") * 196.8503937, Bank = Num("bank") * 180 / Math.PI,
                 GroundSpeedKnots=values.TryGetValue("groundspeed",out var gs)?Convert.ToDouble(gs)*1.943844492:null,
                 EngineCount=Int("engineCount"),EngineReverse=new[]{Bool("reverse0"),Bool("reverse1"),Bool("reverse2"),Bool("reverse3")},
                 SpoilerPosition=values.TryGetValue("spoilerPosition",out var position)?Convert.ToDouble(position):null,
                 Ground = Bool("ground")!.Value, GearDown = Bool("gear"), GearState = Int("gearState"), Spoilers = Int("spoilers"),
-                ParkingBrake = Bool("brake"), Flaps = Int("flaps"), Autopilot = Bool("ap"), Stall = Bool("stall"), Overspeed = Bool("overspeed")
+                ParkingBrake = Bool("brake"), Flaps = Int("flaps"), FlapStops=flapStops, Autopilot = Bool("ap"), Stall = Bool("stall"), Overspeed = Bool("overspeed")
             };
             if (!frame.Usable) throw new InvalidDataException("Invalid telemetry values. Warnings stopped.");
             onFrame(frame);

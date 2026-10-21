@@ -1,4 +1,4 @@
-param([string]$Output = (Join-Path $PSScriptRoot '..\FlightGuard-v0.5-Windows'))
+param([string]$Output = (Join-Path $PSScriptRoot '..\FlightGuard-v0.6-Windows'))
 $ErrorActionPreference = 'Stop'
 dotnet publish (Join-Path $PSScriptRoot 'FlightGuard.csproj') -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -p:EnableSingleFileAnalyzer=false -p:EnableTrimAnalyzer=false -o $Output
 if ($LASTEXITCODE -ne 0) { throw 'Build failed.' }

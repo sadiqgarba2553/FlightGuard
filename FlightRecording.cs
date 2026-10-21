@@ -21,6 +21,8 @@ public sealed record FlightEvent
     public string? Phase {get;init;}
     public string? CabinStage {get;init;}
     public string? Warning {get;init;}
+    public string? WarningReason {get;init;}
+    public ForwardTerrainAssessment? ForwardTerrain {get;init;}
     public string[]? Cues {get;init;}
     public ApproachAssessment? Approach {get;init;}
     public PlaybackStamp? Playback {get;init;}
@@ -52,7 +54,7 @@ public sealed class FlightRecorder
             }catch(Exception ex){Error=ex.Message;queue.Writer.TryComplete();if(ReferenceEquals(channel,queue))channel=null;}
         });
         writers.Add(writer);
-        Record(new(){Kind="session",Aircraft=aircraft,Settings=Settings.Copy(settings),Note="FlightGuard 0.5; UTC timestamps; frame units feet/knots/fpm/degrees; local recording"});
+        Record(new(){Kind="session",Aircraft=aircraft,Settings=Settings.Copy(settings),Note="FlightGuard 0.6; UTC timestamps; frame units feet/knots/fpm/degrees; local recording"});
         return Task.CompletedTask;
     }
     public void Record(FlightEvent e) {
@@ -98,10 +100,10 @@ public sealed class FlightRecorder
             if(e.Settings!=null){settings=Settings.Copy(e.Settings);}
             if(e.Kind=="cabin-command"){if(e.Note=="board")cabin.StartBoarding();else if(e.Note=="ready")cabin.ReadyForDeparture();else if(e.Note=="stop")settings.Cabin.Enabled=false;}
             if(e.Frame is not Frame f)continue;
-            var cues=engine.Update(f,settings,Catalog.AircraftProfile(f.Aircraft),false);cues.AddRange(crew.Update(f,engine.Phase,settings.ExtraCrew&&settings.Crew));
+            var cues=engine.Update(f,settings,Catalog.AircraftProfile(f.Aircraft),false,e.ForwardTerrain);cues.AddRange(crew.Update(f,engine.Phase,settings.ExtraCrew&&settings.Crew));
             cues.AddRange(cabin.Update(f,engine.Phase,settings.Cabin,engine.ActiveWarning));
             var a=approach.Update(f,settings.Approach,engine.ApproachAudioAllowed);landings.Update(f,a,engine.ActiveWarning);
-            decisions.Add(new{f.Time,Phase=engine.Phase,CabinStage=cabin.Stage,Warning=engine.ActiveWarning,Cues=cues.Select(c=>c.Id),Approach=a});
+            decisions.Add(new{f.Time,Phase=engine.Phase,CabinStage=cabin.Stage,Warning=engine.ActiveWarning,WarningReason=engine.WarningReason,MonitorStatus=engine.MonitorStatus,Cues=cues.Select(c=>c.Id),Approach=a});
         }
         landings.End("Replay ended");
         File.WriteAllText(output,JsonSerializer.Serialize(new{Status="PASS",Frames=decisions.Count,Summary=Summary(events),Landings=results,Decisions=decisions},new JsonSerializerOptions{WriteIndented=true}));return 0;

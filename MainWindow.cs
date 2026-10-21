@@ -35,6 +35,8 @@ public sealed class MainWindow : Window
     private readonly LandingAnalyzer landingAnalyzer=new();
     private readonly ExtraCrewMonitor extraCrew=new();
     private readonly CabinExperience cabin=new();
+    private readonly ForwardTerrainService forwardTerrain=new(Path.Combine(Settings.DataFolder,"TerrainCache"));
+    private ForwardTerrainAssessment? replayAhead;
     private FlightToolsPanel tools=null!;
     private bool loadingSettings,replaying,recordingSuppressed;
     private Settings? beforeReplay;
@@ -94,6 +96,7 @@ public sealed class MainWindow : Window
         Get<ComboBox>("PackFamily").SelectionChanged += (_, _) => RefreshSounds();
         Get<Button>("Import").Click += (_, _) => Import();
         Get<Button>("Export").Click += (_, _) => Export();
+        Get<Button>("TerrainNotices").Click+=(_,_)=>OpenFile(Path.Combine(AppContext.BaseDirectory,"Terrain-notices","README.md"));
         Get<Button>("OpenGuide").Click += (_, _) => OpenFile(Path.Combine(AppContext.BaseDirectory, "START-HERE.html"));
         Get<ComboBox>("Devices").SelectionChanged += (_, _) => { if (Get<ComboBox>("Devices").SelectedItem is Device d) Get<TextBox>("Host").Text = d.Address; };
         Get<ComboBox>("Profile").SelectionChanged += (_, _) => {
@@ -109,7 +112,7 @@ public sealed class MainWindow : Window
             }
         }, Dispatcher);
         watchdog.Start();
-        Closing += async (_, e) => { if(shuttingDown)return;e.Cancel=true;shuttingDown=true;scan?.Cancel();Disconnect();watchdog.Stop();tools.Close();await recorder.Stop("Application closed");audio.Dispose();await Task.Yield();Close(); };
+        Closing += async (_, e) => { if(shuttingDown)return;e.Cancel=true;shuttingDown=true;scan?.Cancel();Disconnect();watchdog.Stop();tools.Close();forwardTerrain.Dispose();await recorder.Stop("Application closed");audio.Dispose();await Task.Yield();Close(); };
         RefreshSounds(); UpdateProfile();
         AddLog("Ready. Enable Connect on your phone/tablet, then discover or enter its local IP.");
         AddLog("V-speeds start disarmed. Verify values for the current aircraft, arm, then Apply settings.");
@@ -122,8 +125,8 @@ public sealed class MainWindow : Window
         Get<TextBox>("Host").Text = settings.Host;
         Get<ComboBox>("Profile").ItemsSource = new[]{"Auto"}.Concat(Catalog.Profiles).ToArray();
         Get<ComboBox>("Profile").SelectedItem = settings.Profile;
-        foreach (var (name, n) in new[] { ("V1",settings.V1), ("VR",settings.Vr), ("V2",settings.V2), ("Minimums",settings.Minimums), ("Sink",settings.SinkRate), ("Pull",settings.PullUpRate), ("TerrainTime",settings.TerrainSeconds), ("Bank",settings.BankAngle), ("GearHeight",settings.GearHeight), ("FlapHeight",settings.FlapsHeight) }) Get<TextBox>(name).Text = n.ToString(CultureInfo.InvariantCulture);
-        foreach (var (name, enabled) in new[] {("Armed",settings.SpeedsArmed),("Warnings",settings.Warnings),("Heights",settings.Heights),("Crew",settings.Crew),("Terrain",settings.Terrain),("GearWarnings",settings.GearWarnings),("FlapWarnings",settings.FlapWarnings),("Retard",settings.Retard)}) Get<CheckBox>(name).IsChecked = enabled;
+        foreach (var (name, n) in new[] { ("V1",settings.V1), ("VR",settings.Vr), ("V2",settings.V2), ("Minimums",settings.Minimums), ("Sink",settings.SinkRate), ("Pull",settings.PullUpRate), ("TerrainTime",settings.TerrainSeconds), ("Bank",settings.BankAngle), ("GearHeight",settings.GearHeight), ("FlapHeight",settings.FlapsHeight), ("LandingFlapState",(double)settings.GpwsLandingFlapState), ("TerrainAheadSeconds",(double)settings.TerrainLookAheadSeconds) }) Get<TextBox>(name).Text = n.ToString(CultureInfo.InvariantCulture);
+        foreach (var (name, enabled) in new[] {("Armed",settings.SpeedsArmed),("Warnings",settings.Warnings),("Heights",settings.Heights),("Crew",settings.Crew),("Terrain",settings.Terrain),("ForwardTerrain",settings.ForwardTerrain),("GearWarnings",settings.GearWarnings),("FlapWarnings",settings.FlapWarnings),("Retard",settings.Retard)}) Get<CheckBox>(name).IsChecked = enabled;
         Get<Slider>("Volume").Value = settings.Volume;
         Get<TextBox>("PollMs").Text=settings.PollMilliseconds.ToString(); Get<TextBox>("LeadMs").Text=settings.CalloutLeadMilliseconds.ToString();
         Get<ComboBox>("PackFamily").ItemsSource = Catalog.Profiles; Get<ComboBox>("PackFamily").SelectedItem=family;
@@ -138,12 +141,14 @@ public sealed class MainWindow : Window
             var next = new Settings {
                 Host = Get<TextBox>("Host").Text.Trim(), Profile = Get<ComboBox>("Profile").SelectedItem?.ToString() ?? "Auto",
                 V1 = Num("V1"), Vr = Num("VR"), V2 = Num("V2"), Minimums = Num("Minimums"), SinkRate = Num("Sink"), PullUpRate = Num("Pull"),
-                TerrainSeconds = Num("TerrainTime"), BankAngle = Num("Bank"), GearHeight = Num("GearHeight"), FlapsHeight = Num("FlapHeight"),
+                ForwardTerrain=On("ForwardTerrain"),TerrainLookAheadSeconds=checked((int)Num("TerrainAheadSeconds")), GpwsLandingFlapState=checked((int)Num("LandingFlapState")), TerrainSeconds = Num("TerrainTime"), BankAngle = Num("Bank"), GearHeight = Num("GearHeight"), FlapsHeight = Num("FlapHeight"),
                 SpeedsArmed = On("Armed"), Warnings = On("Warnings"), Heights = On("Heights"), Crew = On("Crew"), Terrain = On("Terrain"), GearWarnings = On("GearWarnings"), FlapWarnings = On("FlapWarnings"), Retard = On("Retard"),
                 Volume = (int)Get<Slider>("Volume").Value, PollMilliseconds=(int)Num("PollMs"), CalloutLeadMilliseconds=(int)Num("LeadMs"),
                 Cabin=tools.ReadCabin(), Approach=tools.ReadApproach(), AutoRecord=tools.AutoRecord, ExtraCrew=tools.ExtraCrew,
                 DisabledSounds = rows.Where(x => !x.Enabled).Select(x => x.Id).ToList()
             };
+            if(Num("TerrainAheadSeconds")!=next.TerrainLookAheadSeconds)throw new ArgumentException("Look-ahead seconds must be an integer.");
+            if(Num("LandingFlapState")!=next.GpwsLandingFlapState)throw new ArgumentException("Landing flap state must be an integer.");
             next.Save(); settings = next;
             if(latest!=null&&!demo){aircraftPreferences.Save(latest.Aircraft,settings);tools.SetAircraft(latest.Aircraft,true);}else if(!demo)defaults=Settings.Copy(settings);
             if(!settings.AutoRecord&&recorder.IsRecording){recordingSuppressed=true;_=recorder.Stop("Automatic recording disabled");}
@@ -169,7 +174,7 @@ public sealed class MainWindow : Window
         if (!SaveSettings()) return;
         recordingSuppressed=false;demo = useDemo; session = new(); var token = session.Token;
         Get<Button>("Connect").Content = "Disconnect"; Get<Button>("Demo").Content = demo ? "Stop demo" : "Run demo";
-        engine.Reset();cabin.Reset(); audio.Stop();
+        engine.Reset();cabin.Reset();forwardTerrain.Reset();replayAhead=null; audio.Stop();
         if (demo) _ = RunDemo(token); else _ = RunConnect(settings.Host, token);
     }
     private async Task RunConnect(string host, CancellationToken token)
@@ -201,14 +206,14 @@ public sealed class MainWindow : Window
     {
         session?.Cancel(); session?.Dispose(); session = null;
         landingAnalyzer.End(replaying?"Replay stopped":"Session ended");_=recorder.Stop("Disconnected");
-        demo = false; latest = null;lastAircraft="";lastApproachTone=default;approachState=""; engine.Reset();approach.Reset();extraCrew.Reset();cabin.Reset(); audio.Stop();
+        demo = false; latest = null;lastAircraft="";lastApproachTone=default;approachState=""; engine.Reset();approach.Reset();extraCrew.Reset();cabin.Reset();forwardTerrain.Reset();replayAhead=null; audio.Stop();
         if(replaying){replaying=false;if(beforeReplay!=null){settings=beforeReplay;settings.SpeedsArmed=false;family=familyBeforeReplay;beforeReplay=null;audio.Muted=muteBeforeReplay;audio.Configure(settings,family);if(!shuttingDown)LoadSettings();}}
         tools.Update(recorder,approach.Current,extraCrew.Status,false);
         if(!shuttingDown){Get<ComboBox>("Profile").IsEnabled=true;Get<Button>("Mute").Content=audio.Muted?"Unmute audio":"Mute audio";}
         if (shuttingDown) return;
         Get<Button>("Connect").Content = "Connect"; Get<Button>("Demo").Content = "Run demo"; Text("Status", "DISCONNECTED"); Text("Warning", "Ready when you are"); Text("Phase", "Standby"); ClearMetrics();
     }
-    private void ClearMetrics() { Text("Agl", "—"); Text("Ias", "—"); Text("Vs", "—"); }
+    private void ClearMetrics() { Text("GpwsReason",""); Text("Agl", "—"); Text("Ias", "—"); Text("Vs", "—"); }
     private void Receive(Frame f)
     {
         bool changed = lastAircraft != f.Aircraft;
@@ -230,7 +235,8 @@ public sealed class MainWindow : Window
         Text("Aircraft", f.Aircraft); if(changed)UpdateProfile();
         Text("Status", replaying ? "REPLAY · LIVE DISCONNECTED" : demo ? "DEMO · SIMULATED DATA" : f.Active ? "CONNECTED · LIVE" : "SIMULATOR INACTIVE");
         Text("Agl", f.Agl.ToString("N0")); Text("Ias", f.Ias.ToString("N0")); Text("Vs", f.Vs.ToString("+0;-0;0"));
-        var cues = engine.Update(f, settings, family,!replaying);
+        var ahead=replaying?replayAhead:forwardTerrain.Observe(f,settings,demo||session==null);
+        var cues = engine.Update(f, settings, family,!replaying,ahead);
         cues.AddRange(extraCrew.Update(f,engine.Phase,settings.ExtraCrew&&settings.Crew));
         cues.AddRange(cabin.Update(f,engine.Phase,settings.Cabin,engine.ActiveWarning));
         tools.UpdateCabin(cabin.Status);
@@ -238,9 +244,9 @@ public sealed class MainWindow : Window
         if(assessment.State=="Unstable"&&approachState!="Unstable"&&settings.Approach.CautionTone&&engine.ActiveWarning==""&&(f.Time-lastApproachTone).TotalSeconds>15){cues.Add(Catalog.Get("master-caution"));lastApproachTone=f.Time;}
         approachState=assessment.State;Text("ApproachStrip",assessment.Active?assessment.Description:"");
         landingAnalyzer.Update(f,assessment,engine.ActiveWarning);
-        if(!replaying&&!demo&&session!=null){if(settings.AutoRecord&&!recordingSuppressed&&!recorder.IsRecording&&recorder.Error==null)_=recorder.Start(Path.Combine(Settings.DataFolder,"Recordings"),f.Aircraft,settings);recorder.Record(new(){Kind="frame",Time=f.Time,Frame=f,Phase=engine.Phase,CabinStage=cabin.Stage,Warning=engine.ActiveWarning,Cues=cues.Select(c=>c.Id).ToArray(),Approach=assessment});}
+        if(!replaying&&!demo&&session!=null){if(settings.AutoRecord&&!recordingSuppressed&&!recorder.IsRecording&&recorder.Error==null)_=recorder.Start(Path.Combine(Settings.DataFolder,"Recordings"),f.Aircraft,settings);recorder.Record(new(){Kind="frame",Time=f.Time,Frame=f,Phase=engine.Phase,CabinStage=cabin.Stage,Warning=engine.ActiveWarning,WarningReason=engine.WarningReason,ForwardTerrain=ahead,Cues=cues.Select(c=>c.Id).ToArray(),Approach=assessment});}
         tools.Update(recorder,assessment,extraCrew.Status,replaying);
-        Text("Phase", engine.Phase);
+        Text("Phase", engine.Phase);Text("GpwsReason",engine.ActiveWarning!=""?engine.WarningReason:engine.MonitorStatus+" · "+(replaying?"Forward terrain: recorded assessment only":forwardTerrain.Status));
         if(lastPhase!=engine.Phase) { lastPhase=engine.Phase; AddLog($"PHASE  {lastPhase} · {f.Agl:0} ft AGL · {f.Vs:+0;-0;0} fpm"); }
         if (!f.Active) { audio.Stop(); Text("Warning", "Paused / inactive · audio suspended"); }
         else {
@@ -293,20 +299,20 @@ public sealed class MainWindow : Window
                 if(e.Kind=="cabin-command"){ApplyCabinCommand(e.Note??"");}
                 if(e.Frame is not Frame frame)continue;
                 if(prior!=default)await Task.Delay(TimeSpan.FromMilliseconds(Math.Clamp((frame.Time-prior).TotalMilliseconds/speed,0,2000)),token);
-                prior=frame.Time;if(!token.IsCancellationRequested)Receive(frame);
+                prior=frame.Time;replayAhead=e.ForwardTerrain;if(!token.IsCancellationRequested)Receive(frame);
             }
         }catch(OperationCanceledException){}finally{if(ReferenceEquals(session,replaySession)&&replaying){Disconnect();AddLog("Replay ended; live simulator remains disconnected.");}}
     }
     public async Task VerifyReplayWorkflow(string input,string output) {
-        int before=ConnectClient.ConnectionAttempts;var snapshot=Settings.Copy(settings);
+        int before=ConnectClient.ConnectionAttempts,terrainBefore=TerrainTiles.NetworkRequests;var snapshot=Settings.Copy(settings);
         await StartReplay(FlightRecorder.Read(input),1000,false);
-        if(session!=null||replaying||recorder.IsRecording||ConnectClient.ConnectionAttempts!=before)throw new InvalidOperationException("Replay reached a live connection or recorder.");
+        if(session!=null||replaying||recorder.IsRecording||ConnectClient.ConnectionAttempts!=before||TerrainTiles.NetworkRequests!=terrainBefore)throw new InvalidOperationException("Replay reached a live connection, terrain download or recorder.");
         snapshot.SpeedsArmed=false;
         if(System.Text.Json.JsonSerializer.Serialize(settings)!=System.Text.Json.JsonSerializer.Serialize(snapshot))throw new InvalidOperationException("Replay changed live aircraft settings.");
-        System.IO.File.WriteAllText(output,System.Text.Json.JsonSerializer.Serialize(new{Status="PASS",LiveConnections=ConnectClient.ConnectionAttempts-before,RecorderActive=recorder.IsRecording,LiveSettingsRestored=true,Frames=FlightRecorder.Read(input).Count(e=>e.Frame!=null)},new System.Text.Json.JsonSerializerOptions{WriteIndented=true}));
+        System.IO.File.WriteAllText(output,System.Text.Json.JsonSerializer.Serialize(new{Status="PASS",LiveConnections=ConnectClient.ConnectionAttempts-before,TerrainRequests=TerrainTiles.NetworkRequests-terrainBefore,RecorderActive=recorder.IsRecording,LiveSettingsRestored=true,Frames=FlightRecorder.Read(input).Count(e=>e.Frame!=null)},new System.Text.Json.JsonSerializerOptions{WriteIndented=true}));
     }
     public void RenderTools(string path,int page){tools.SelectPage(page);Render(path,4);}
-    public void CloseForRender(){shuttingDown=true;watchdog.Stop();tools.Close();audio.Dispose();Close();}
+    public void CloseForRender(){shuttingDown=true;watchdog.Stop();tools.Close();forwardTerrain.Dispose();audio.Dispose();Close();}
 
     private void Import()
     {
@@ -395,7 +401,7 @@ public sealed class MainWindow : Window
     <Border Background="#111F32" CornerRadius="8" Padding="18" Margin="0,0,12,0"><StackPanel><TextBlock Text="INDICATED AIRSPEED" Style="{StaticResource Caption}"/><StackPanel Orientation="Horizontal"><TextBlock x:Name="Ias" Text="—" FontSize="42" FontWeight="Light"/><TextBlock Text="KT" Foreground="#849AB5" Margin="10,0,0,8" VerticalAlignment="Bottom"/></StackPanel></StackPanel></Border>
     <Border Background="#111F32" CornerRadius="8" Padding="18" Margin="0,0,12,0"><StackPanel><TextBlock Text="VERTICAL SPEED" Style="{StaticResource Caption}"/><StackPanel Orientation="Horizontal"><TextBlock x:Name="Vs" Text="—" FontSize="42" FontWeight="Light"/><TextBlock Text="FPM" Foreground="#849AB5" Margin="10,0,0,8" VerticalAlignment="Bottom"/></StackPanel></StackPanel></Border>
    </UniformGrid>
-   <Border Background="#142A32" BorderBrush="#2B5052" BorderThickness="1" CornerRadius="8" Padding="18" Margin="0,0,0,16"><Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel><TextBlock x:Name="Phase" Text="Standby" Foreground="#55DBC4" FontSize="11"/><TextBlock x:Name="Warning" Text="Ready when you are" FontSize="22" FontWeight="SemiBold" Margin="0,5,0,6"/><TextBlock x:Name="Config" Text="Live aircraft configuration appears here." Foreground="#8FACB8" FontSize="11"/><TextBlock x:Name="ApproachStrip" Text="" Foreground="#E8BE73" FontSize="11" TextWrapping="Wrap" Margin="0,5,0,0"/></StackPanel><StackPanel Grid.Column="1" HorizontalAlignment="Right" VerticalAlignment="Center"><TextBlock Text="LAST AUDIO" Foreground="#8FACB8" FontSize="10" HorizontalAlignment="Right"/><TextBlock x:Name="LastCue" Text="—" FontSize="14" Margin="15,5,0,2"/><TextBlock x:Name="AudioSource" Text="" FontSize="10" Foreground="#8FACB8" HorizontalAlignment="Right"/></StackPanel></Grid></Border>
+   <Border Background="#142A32" BorderBrush="#2B5052" BorderThickness="1" CornerRadius="8" Padding="18" Margin="0,0,0,16"><Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel><TextBlock x:Name="Phase" Text="Standby" Foreground="#55DBC4" FontSize="11"/><TextBlock x:Name="Warning" Text="Ready when you are" FontSize="22" FontWeight="SemiBold" Margin="0,5,0,6"/><TextBlock x:Name="Config" Text="Live aircraft configuration appears here." Foreground="#8FACB8" FontSize="11"/><TextBlock x:Name="GpwsReason" Text="" Foreground="#8FACB8" FontSize="11" TextWrapping="Wrap" Margin="0,5,10,0"/><TextBlock x:Name="ApproachStrip" Text="" Foreground="#E8BE73" FontSize="11" TextWrapping="Wrap" Margin="0,5,0,0"/></StackPanel><StackPanel Grid.Column="1" HorizontalAlignment="Right" VerticalAlignment="Center"><TextBlock Text="LAST AUDIO" Foreground="#8FACB8" FontSize="10" HorizontalAlignment="Right"/><TextBlock x:Name="LastCue" Text="—" FontSize="14" Margin="15,5,0,2"/><TextBlock x:Name="AudioSource" Text="" FontSize="10" Foreground="#8FACB8" HorizontalAlignment="Right"/></StackPanel></Grid></Border>
    <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="18"/><ColumnDefinition Width="320"/></Grid.ColumnDefinitions>
     <Border Background="#101D2D" CornerRadius="8" Padding="18"><StackPanel><TextBlock Text="FLIGHT CALLOUTS" Style="{StaticResource Caption}"/>
      <UniformGrid Columns="4" Margin="0,7,-10,12"><StackPanel Margin="0,0,10,0"><TextBlock Text="V1 · KT" Style="{StaticResource Caption}"/><TextBox x:Name="V1"/></StackPanel><StackPanel Margin="0,0,10,0"><TextBlock Text="ROTATE · KT" Style="{StaticResource Caption}"/><TextBox x:Name="VR"/></StackPanel><StackPanel Margin="0,0,10,0"><TextBlock Text="V2 · KT" Style="{StaticResource Caption}"/><TextBox x:Name="V2"/></StackPanel><StackPanel Margin="0,0,10,0"><TextBlock Text="MIN · FT AGL" Style="{StaticResource Caption}"/><TextBox x:Name="Minimums"/></StackPanel></UniformGrid>
@@ -404,14 +410,14 @@ public sealed class MainWindow : Window
     </StackPanel></Border>
     <Border Grid.Column="2" Background="#101D2D" CornerRadius="8" Padding="18"><StackPanel><TextBlock Text="AUDIO" Style="{StaticResource Caption}"/><TextBlock x:Name="PackSummary" TextWrapping="Wrap" FontSize="12" Margin="0,4,0,10"/><Slider x:Name="Volume" Minimum="0" Maximum="100" TickFrequency="5" IsSnapToTickEnabled="True" Margin="0,0,0,14" ToolTip="Volume; apply settings to save"/><StackPanel Orientation="Horizontal"><Button x:Name="Mute" Content="Mute audio" Margin="0,0,10,0"/><Button x:Name="Test" Content="Test audio"/></StackPanel></StackPanel></Border>
    </Grid>
-   <TextBlock Text="Terrain alerts estimate closure below the aircraft. Forward terrain, TCAS and windshear prediction are unavailable." FontSize="11" Foreground="#849AB5" TextWrapping="Wrap" Margin="2,14,0,16"/>
+   <TextBlock Text="Forward terrain uses cached / online elevation along ground track, with local closure as fallback. Terrain may differ from the game; buildings, TCAS and windshear are not modelled." FontSize="11" Foreground="#849AB5" TextWrapping="Wrap" Margin="2,14,0,16"/>
   </StackPanel></ScrollViewer></TabItem>
   <TabItem Header="Warning settings"><ScrollViewer VerticalScrollBarVisibility="Auto"><Grid Margin="0,22,0,0"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="35"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
    <StackPanel><TextBlock Text="SIMULATOR WARNING THRESHOLDS" Style="{StaticResource Caption}"/><TextBlock Text="Adjust to your flight" FontSize="23" Margin="0,0,0,15"/>
-    <UniformGrid Columns="2"><StackPanel Margin="0,0,12,15"><TextBlock Text="Sink reference at 500 ft · FPM" Style="{StaticResource Caption}"/><TextBox x:Name="Sink"/></StackPanel><StackPanel Margin="0,0,12,15"><TextBlock Text="Pull-up reference at 500 ft · FPM" Style="{StaticResource Caption}"/><TextBox x:Name="Pull"/></StackPanel><StackPanel Margin="0,0,12,15"><TextBlock Text="Terrain closure horizon · SEC" Style="{StaticResource Caption}"/><TextBox x:Name="TerrainTime"/></StackPanel><StackPanel Margin="0,0,12,15"><TextBlock Text="Bank threshold · DEG" Style="{StaticResource Caption}"/><TextBox x:Name="Bank"/></StackPanel><StackPanel Margin="0,0,12,15"><TextBlock Text="Gear warning height · FT AGL" Style="{StaticResource Caption}"/><TextBox x:Name="GearHeight"/></StackPanel><StackPanel Margin="0,0,12,15"><TextBlock Text="Flaps warning height · FT AGL" Style="{StaticResource Caption}"/><TextBox x:Name="FlapHeight"/></StackPanel></UniformGrid>
-    <TextBlock Text="Sink and pull-up use continuous height-based envelopes, scaled by these 500-ft reference settings. These are configurable simulator approximations, not certified aircraft envelopes. Minimums use height AGL. Apply changes from the Flight deck tab." TextWrapping="Wrap" Foreground="#849AB5" FontSize="12"/>
+    <UniformGrid Columns="2"><StackPanel Margin="0,0,12,15"><TextBlock Text="Sink reference at 500 ft · FPM" Style="{StaticResource Caption}"/><TextBox x:Name="Sink"/></StackPanel><StackPanel Margin="0,0,12,15"><TextBlock Text="Pull-up reference at 500 ft · FPM" Style="{StaticResource Caption}"/><TextBox x:Name="Pull"/></StackPanel><StackPanel Margin="0,0,12,15"><TextBlock Text="Local closure horizon · SEC" Style="{StaticResource Caption}"/><TextBox x:Name="TerrainTime"/></StackPanel><StackPanel Margin="0,0,12,15"><TextBlock Text="Bank threshold · DEG" Style="{StaticResource Caption}"/><TextBox x:Name="Bank"/></StackPanel><StackPanel Margin="0,0,12,15"><TextBlock Text="Gear warning height · FT AGL" Style="{StaticResource Caption}"/><TextBox x:Name="GearHeight"/></StackPanel><StackPanel Margin="0,0,12,15"><TextBlock Text="Flaps warning height · FT AGL" Style="{StaticResource Caption}"/><TextBox x:Name="FlapHeight"/></StackPanel><StackPanel Margin="0,0,12,15"><TextBlock Text="GPWS landing flap STATE · -1 = automatic" Style="{StaticResource Caption}"/><TextBox x:Name="LandingFlapState"/></StackPanel><StackPanel Margin="0,0,12,15"><TextBlock Text="Forward look-ahead · SEC" Style="{StaticResource Caption}"/><TextBox x:Name="TerrainAheadSeconds"/></StackPanel></UniformGrid>
+    <TextBlock Text="Sink and pull-up use continuous height-based envelopes, scaled by these 500-ft reference settings. These are configurable simulator approximations, not certified aircraft envelopes. Minimums use height AGL. Gear/flap alerts require sustained approach conditions and allow configuration travel time. GPWS landing flap STATE -1 warns only on verified clean configuration; select a stop index for a specific landing requirement. Missing definitions stay unknown. Apply changes from the Flight deck tab." TextWrapping="Wrap" Foreground="#849AB5" FontSize="12"/>
    </StackPanel>
-   <StackPanel Grid.Column="2"><TextBlock Text="AUTOMATIC AUDIO" Style="{StaticResource Caption}"/><CheckBox x:Name="Warnings" Content="GPWS and flight warnings" Margin="0,12,0,14"/><CheckBox x:Name="Heights" Content="Height and minimums callouts"/><CheckBox x:Name="Crew" Content="Co-pilot and configuration callouts"/><CheckBox x:Name="Terrain" Content="Local terrain closure estimate"/><CheckBox x:Name="GearWarnings" Content="Too low gear (retractable aircraft)"/><CheckBox x:Name="FlapWarnings" Content="Too low flaps (zero flap setting)"/><CheckBox x:Name="Retard" Content="Airbus retard at 20 ft (simplified)"/>
+   <StackPanel Grid.Column="2"><TextBlock Text="AUTOMATIC AUDIO" Style="{StaticResource Caption}"/><CheckBox x:Name="Warnings" Content="GPWS and flight warnings" Margin="0,12,0,14"/><CheckBox x:Name="Heights" Content="Height and minimums callouts"/><CheckBox x:Name="Crew" Content="Co-pilot and configuration callouts"/><CheckBox x:Name="Terrain" Content="Terrain protection (local and forward)"/><CheckBox x:Name="ForwardTerrain" Content="Forward terrain: online / cached elevation tiles"/><Button x:Name="TerrainNotices" Content="Terrain data sources and notices" HorizontalAlignment="Left" Margin="0,4,0,10"/><CheckBox x:Name="GearWarnings" Content="Too low gear (retractable aircraft)"/><CheckBox x:Name="FlapWarnings" Content="Too low flaps (verified aircraft configuration)"/><CheckBox x:Name="Retard" Content="Airbus retard at 20 ft (simplified)"/>
     <TextBlock Text="RECORDING TIMING" Style="{StaticResource Caption}" Margin="0,15,0,8"/><UniformGrid Columns="2"><StackPanel Margin="0,0,12,0"><TextBlock Text="Poll interval · MS" Style="{StaticResource Caption}"/><TextBox x:Name="PollMs"/></StackPanel><StackPanel><TextBlock Text="Callout lead · MS" Style="{StaticResource Caption}"/><TextBox x:Name="LeadMs"/></StackPanel></UniformGrid><TextBlock Text="Preloaded recordings only. Timing compensation: 0–250 ms. Poll interval: 50–500 ms; reconnect after changing it. V1, rotate and heights interrupt routine crew calls. Missing recordings remain silent." Foreground="#849AB5" TextWrapping="Wrap" Margin="0,12,0,0"/>
    </StackPanel>
   </Grid></ScrollViewer></TabItem>
@@ -426,7 +432,7 @@ public sealed class MainWindow : Window
    <TextBox Grid.Row="2" x:Name="Log" IsReadOnly="True" VerticalContentAlignment="Top" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" FontFamily="Consolas" FontSize="12" Margin="0,0,0,12"/>
   </Grid></TabItem>
  </TabControl>
- <TextBlock Grid.Row="3" Text="FLIGHTGUARD v0.5   ·   sadiq_ibraheem / INFINITE FLIGHT COMMUNITY   ·   SIMULATOR USE ONLY" HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="#526D8E" FontSize="10"/>
+ <TextBlock Grid.Row="3" Text="FLIGHTGUARD v0.6   ·   sadiq_ibraheem / INFINITE FLIGHT COMMUNITY   ·   SIMULATOR USE ONLY" HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="#526D8E" FontSize="10"/>
 </Grid>
 """;
 }

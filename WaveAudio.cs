@@ -116,7 +116,9 @@ public sealed class CueQueue
                 }
                 if(cue.Id=="rotate"&&playing?.Id=="v1"&&(now-began).TotalMilliseconds>350)interrupt=true;
             }
-            if(playing?.Id!=cue.Id&&!pending.Any(x=>x.Cue.Id==cue.Id))pending.Add(new(cue,now,family));
+            int existing=pending.FindIndex(x=>x.Cue.Id==cue.Id);
+            if(Warning(cue)&&existing>=0)pending[existing]=new(cue,now,family);
+            else if((playing?.Id!=cue.Id||Warning(cue))&&existing<0)pending.Add(new(cue,now,family));
         }
         return interrupt;
     }

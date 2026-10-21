@@ -1,3 +1,13 @@
+# 0.6.0 — Earlier, context-aware terrain and configuration warnings
+
+- Add GPS-based forward terrain monitoring with a cached elevation corridor, configurable 60-second horizon, validity checks and explicit unavailable status.
+- Add recorded terrain-ahead and terrain-ahead/pull-up audio from pinned LGPL-3.0 FlightAssistant originals, with reproducible conversion and licences.
+- Raise default gear/flap gates to 800/500 ft; use aircraft flap angles, travel grace and approach/departure history.
+- Keep one fresh warning repeat while audio plays; discard it on resolution. Independent persistence timers prevent marginal conditions from delaying another warning.
+- Reject isolated AGL spikes and inconsistent terrain closure; show and record warning reasons and forward assessments.
+- Replay stays offline, with recorded terrain assessments; 141 logic checks, 197 audio decodes, native priority, 903-frame replay and real terrain-tile checks passed.
+- Live flight testing deferred at the user's request.
+
 # Changelog
 
 ## 0.5.0 — 21 October 2026

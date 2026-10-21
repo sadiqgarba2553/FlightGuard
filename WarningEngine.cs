@@ -13,7 +13,11 @@ public sealed class WarningEngine
     private readonly Dictionary<string, DateTime> last = new();
     private DateTime liftoff;
     private double peakMsl;
-    private double closureFpm;
+    private readonly TerrainTrend terrainTrend=new();
+    private readonly ConfigurationContext configuration=new();
+    private readonly AlertPersistence alertPersistence=new();
+    public string WarningReason {get;private set;}="";
+    public string MonitorStatus=>configuration.Status+" · "+terrainTrend.Status;
     private double acceleration;
     private bool takeoffObserved;
     private bool landingRoll;
@@ -24,25 +28,24 @@ public sealed class WarningEngine
     public void Reset()
     {
         previous = null; phases.Reset(); ApproachAudioAllowed=false; once.Clear(); last.Clear(); liftoff = default; takeoffObserved = false;
-        peakMsl = 0; closureFpm = 0; acceleration = 0; landingRoll = false; pending = ""; ActiveWarning = ""; Phase = "Standby";
+        peakMsl = 0; acceleration = 0; landingRoll = false; pending = ""; ActiveWarning = "";WarningReason=""; Phase = "Standby";
+        terrainTrend.Reset();configuration.Reset();alertPersistence.Reset();
     }
-    public List<SoundCue> Update(Frame f, Settings s, string family, bool enforceFreshness=true)
+    public List<SoundCue> Update(Frame f, Settings s, string family, bool enforceFreshness=true,ForwardTerrainAssessment? ahead=null)
     {
         var result = new List<SoundCue>();
-        string priorWarning=ActiveWarning; ActiveWarning = "";
+        string priorWarning=ActiveWarning; ActiveWarning = "";WarningReason="";
         if (!f.Usable || enforceFreshness && (DateTime.UtcNow - f.Time).TotalSeconds > 3 || !f.Active) { Reset(); Phase = "Paused / inactive"; return result; }
         var p = previous;
         previous = f;
         phases.Update(f); Phase=phases.Label;
+        configuration.Update(f,phases,s);terrainTrend.Update(f);
         ApproachAudioAllowed=!f.Ground && f.Vs < -100 && !phases.DepartureProtection(f);
         family=Catalog.ParentProfile(family);
         if (p == null) { peakMsl = f.Msl; return result; }
         double dt = (f.Time - p.Time).TotalSeconds;
         if (dt <= 0 || dt > 3 || f.Aircraft != p.Aircraft || Math.Abs(f.Agl - p.Agl) > Math.Max(180, Math.Abs(f.Vs) * dt / 60 * 3 + 80))
         { Reset(); previous = f; Phase = "Synchronizing"; return result; }
-        double rawClosure = -(f.Agl-p.Agl)/dt*60;
-        double alpha=1-Math.Exp(-dt/.3);
-        closureFpm += alpha*(Math.Clamp(rawClosure,-24000,24000)-closureFpm);
         double rawAcceleration=Math.Clamp((f.Ias-p.Ias)/dt,-25,25);
         acceleration += (1-Math.Exp(-dt/.2))*(rawAcceleration-acceleration);
         double lead=Math.Clamp(s.CalloutLeadMilliseconds/1000d+Math.Min(120,f.SampleLatencyMilliseconds/2)/1000d,0,.25);
@@ -119,37 +122,43 @@ public sealed class WarningEngine
         // Only known improper states are inferred; aircraft-specific flap settings are not guessed.
         if(s.Warnings && f.Ground && phases.Current==FlightPhase.TakeoffRoll && f.Ias>60 && (f.ParkingBrake==true || f.SpoilerPosition>.2)) {
             if(pending!="takeoff-config") { pending="takeoff-config"; pendingSince=f.Time; }
-            if((f.Time-pendingSince).TotalSeconds>=.3) { ActiveWarning="takeoff-config"; Add("takeoff-config",false,2); result.RemoveAll(x=>x.Priority<70); }
+            if((f.Time-pendingSince).TotalSeconds>=.3) { ActiveWarning="takeoff-config";WarningReason="Takeoff roll with parking brake set or observed spoiler deployment"; Add("takeoff-config",false,2); result.RemoveAll(x=>x.Priority<70); }
             return result;
         }
-        if (!s.Warnings || f.Ground) { pending = ""; return result; }
-        bool descent = f.Vs < -150 && !phases.DepartureProtection(f);
+        if (!s.Warnings || f.Ground) { pending = "";alertPersistence.Reset(); return result; }
         // Continuous simulator envelopes, scaled by the user's 500-ft reference settings.
         // These are not copied manufacturer software envelopes or a certification claim.
         double sinkLimit=Envelope(f.Agl,new[]{1000d,1100,1500,2200,3000,4500})*s.SinkRate/1500;
         double pullLimit=Envelope(f.Agl,new[]{1500d,1700,2200,3500,4800,6500})*s.PullUpRate/2200;
         double bankLimit=Math.Min(s.BankAngle, f.Agl<150?10+(f.Agl-30)/120*15:f.Agl<800?25+(f.Agl-150)/650*(s.BankAngle-25):s.BankAngle);
-        bool closureRisk=s.Terrain&&f.Agl>50&&f.Agl<2000&&closureFpm>Math.Max(1500,-f.Vs+700)&&f.Agl/(closureFpm/60)<s.TerrainSeconds;
+        double horizon=configuration.ConfiguredLanding?Math.Min(s.TerrainSeconds,8):s.TerrainSeconds;
+        if(phases.DepartureProtection(f))horizon=Math.Min(horizon,6);
+        bool closureRisk=s.Terrain&&terrainTrend.Credible&&f.Agl>35&&f.Agl<2000&&terrainTrend.ClosureFpm>(configuration.ConfiguredLanding?1500:1000)&&terrainTrend.TerrainRiseFpm>(configuration.ConfiguredLanding?900:600)&&terrainTrend.ContactSeconds<horizon;
+        bool urgentClosure=closureRisk&&terrainTrend.ContactSeconds<Math.Min(4,s.TerrainSeconds*.45)&&terrainTrend.ClosureFpm>1800;
+        if(configuration.ConfiguredLanding&&f.Agl<150&&!urgentClosure)closureRisk=false;
         double sinkHysteresis=priorWarning=="sink-rate"?.92:1;
         double pullHysteresis=priorWarning=="pull-up"?.92:1;
-        string warning = "";
-        if (f.Agl < 2450 && f.Agl >= 30 && f.Vs < -pullLimit*pullHysteresis) warning = "pull-up";
-        else if (f.Stall == true) warning = "stall";
-        else if (closureRisk && f.Agl/(closureFpm/60)<s.TerrainSeconds*.5) warning="pull-up";
-        else if (closureRisk) warning = "terrain";
-        else if (f.Overspeed == true) warning = "overspeed";
-        else if (f.Agl < 2450 && f.Agl >= 30 && f.Vs < -sinkLimit*sinkHysteresis) warning = "sink-rate";
-        else if (phases.DepartureProtection(f) && peakMsl - f.Msl > Math.Max(25, f.Agl * .1) && f.Vs < -250) warning = "dont-sink";
-        else if (Math.Abs(f.Bank) > bankLimit*(priorWarning=="bank-angle"?.92:1) && f.Agl < 2500 && f.Agl > 30) warning = "bank-angle";
-        else if (s.GearWarnings && !Catalog.FixedGear(f.Aircraft) && descent && f.Agl < s.GearHeight && f.Agl > 30 && f.GearDown == false) warning = "too-low-gear";
-        else if (s.FlapWarnings && descent && f.Agl < s.FlapsHeight && f.Agl > 30 && f.Flaps == 0 && f.GearDown == true) warning = "too-low-flaps";
-        else if (s.Terrain && !Catalog.FixedGear(f.Aircraft) && f.Agl < 150 && f.Agl > 30 && f.GearDown == false && f.Ias > 160 && !phases.DepartureProtection(f)) warning = "too-low-terrain";
-        if (warning == "") { pending = ""; return result; }
-        if (pending != warning) { pending = warning; pendingSince = f.Time; }
-        if (Catalog.Get(warning).Priority >= 95 || (f.Time - pendingSince).TotalSeconds >= (warning=="bank-angle"?.5:.3))
-        {
-            ActiveWarning = warning;
-            Add(warning, false, warning is "pull-up" or "sink-rate" ? 1.6 : warning is "stall" or "overspeed" ? 2 : 2.8);
+        var candidates=new List<(string Id,string Reason)>();
+        void Candidate(string id,bool condition,double hold,string reason){if(alertPersistence.Ready(id,condition,f.Time,hold))candidates.Add((id,reason));}
+        bool aheadValid=s.Terrain&&s.ForwardTerrain&&ahead?.ValidFor(f)==true;
+        Candidate("terrain-ahead-pull-up",aheadValid&&ahead!.Alert=="terrain-ahead-pull-up",0,ahead?.Reason??"");
+        Candidate("terrain-ahead",aheadValid&&ahead!.Alert=="terrain-ahead",.3,ahead?.Reason??"");
+        // Each condition has its own timer, so one marginal alert cannot continually restart another's confirmation.
+        Candidate("pull-up-sink",f.Agl<2450&&f.Agl>=30&&f.Vs< -pullLimit*pullHysteresis,0,$"Excessive descent {f.Vs:0} fpm at {f.Agl:0} ft AGL");
+        Candidate("stall",f.Stall==true,0,"Simulator stall warning is active");
+        Candidate("pull-up-terrain",urgentClosure,.2,$"Observed rising terrain; estimated clearance time {terrainTrend.ContactSeconds:0.0} s");
+        Candidate("terrain",closureRisk,.6,$"Sustained ground rise {terrainTrend.TerrainRiseFpm:0} fpm and AGL closure {terrainTrend.ClosureFpm:0} fpm; no forward map");
+        Candidate("overspeed",f.Overspeed==true,.3,"Simulator overspeed warning is active");
+        Candidate("sink-rate",f.Agl<2450&&f.Agl>=30&&f.Vs< -sinkLimit*sinkHysteresis,.3,$"Descent {f.Vs:0} fpm exceeds the height-based sink envelope");
+        Candidate("dont-sink",phases.DepartureProtection(f)&&peakMsl-f.Msl>Math.Max(25,f.Agl*.1)&&f.Vs< -250,.3,$"Lost {peakMsl-f.Msl:0} ft after observed departure / go-around");
+        Candidate("bank-angle",Math.Abs(f.Bank)>bankLimit*(priorWarning=="bank-angle"?.92:1)&&f.Agl<2500&&f.Agl>30,.5,$"Bank {Math.Abs(f.Bank):0}° exceeds the height-based limit");
+        Candidate("too-low-gear",s.GearWarnings&&configuration.GearUnsafe&&f.Agl<s.GearHeight+(priorWarning=="too-low-gear"?40:0)&&f.Agl>30,f.Agl<150?.2:.6,f.GearDown==true?"Gear selected down; extension not confirmed after clearance-based grace":"Sustained approach below gear gate with gear selected up");
+        Candidate("too-low-flaps",s.FlapWarnings&&configuration.FlapsUnsafe&&f.Agl<s.FlapsHeight+(priorWarning=="too-low-flaps"?30:0)&&f.Agl>30,.5,$"Sustained approach below flap gate: {AircraftConfiguration.FlapDescription(f)} does not meet selected configuration");
+        Candidate("too-low-terrain",s.Terrain&&!Catalog.FixedGear(f.Aircraft)&&!configuration.Allowed&&f.Vs<100&&f.Agl<150&&f.Agl>30&&f.GearDown==false&&f.Ias>160&&!phases.DepartureProtection(f),1,"Low clearance at high speed with gear up outside the landing configuration monitor");
+        var selected=candidates.Select(c=>(Id:c.Id.StartsWith("pull-up-")?"pull-up":c.Id,c.Reason)).OrderByDescending(c=>Catalog.Get(c.Id).Priority).FirstOrDefault();
+        if(selected.Id!=null){
+            string warning=selected.Id;ActiveWarning=warning;WarningReason=selected.Reason;
+            Add(warning, false, warning is "pull-up" or "terrain-ahead-pull-up"?1.2:warning=="sink-rate"?1.6:warning is "terrain" or "terrain-ahead" or "too-low-gear" or "too-low-flaps" or "too-low-terrain"?1.8:warning is "stall" or "overspeed"?2:2.8);
             // Safety alerts suppress callouts for this sample, even while the alert is in its repeat interval.
             result.RemoveAll(x => x.Priority < 70);
         }

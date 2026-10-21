@@ -16,6 +16,7 @@ public static class Program
         if(args.Length>1 && args[0]=="--make-demo-recording"){FeatureTests.WriteDemo(args[1]);return 0;}
         if(args.Length>1 && args[0]=="--verify-audio-priority")return AudioPriorityVerification.Run(args[1]);
         if(args.Length>2 && args[0]=="--export-coverage")return Coverage.Export(args[1],args[2]);
+        if(args.Length>2 && args[0]=="--verify-terrain-data")return TerrainDataVerification.Run(args[1],args[2]).GetAwaiter().GetResult();
         var app = new Application { ShutdownMode = ShutdownMode.OnMainWindowClose };
         app.DispatcherUnhandledException += (_, e) => {
             try { Directory.CreateDirectory(Settings.DataFolder); File.AppendAllText(Path.Combine(Settings.DataFolder, "errors.log"), DateTime.Now + " " + e.Exception + Environment.NewLine); } catch { }
