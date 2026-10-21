@@ -1,0 +1,17 @@
+bin/
+obj/
+.vs/
+publish/
+Data/
+Sounds/
+SoundSources/
+Runtime-Licenses/
+Validation/
+*.pdb
+*.user
+*.fgflight.jsonl
+__pycache__/
+pack-catalog.json
+sound-provenance.json
+sound-coverage.csv
+aircraft-coverage.csv

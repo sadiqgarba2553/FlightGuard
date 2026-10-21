@@ -1,0 +1,61 @@
+A-10
+Airbus A220-300
+Airbus A318
+Airbus A319
+Airbus A320
+Airbus A321
+Airbus A321 NEO
+Airbus A330-200
+Airbus A330-200F
+Airbus A330-300
+Airbus A330-800
+Airbus A330-900
+Airbus A340-600
+Airbus A350-1000
+Airbus A350-900
+Airbus A380
+Boeing 717-200
+Boeing 737-700
+Boeing 737-8 MAX
+Boeing 737-800
+Boeing 737-900
+Boeing 747-200
+Boeing 747-400
+Boeing 747-8
+Boeing 757-200
+Boeing 767-300
+Boeing 777-200ER
+Boeing 777-200LR
+Boeing 777-300ER
+Boeing 777F
+Boeing 787-10
+Boeing 787-8
+Boeing 787-9
+Bombardier Dash 8-Q400
+C-130H
+C-130J
+C-130J-30
+C-17
+Cessna 172
+Cessna 208
+Challenger 350
+Cirrus SR22 GTS
+CRJ-1000
+CRJ-200
+CRJ-700
+CRJ-900
+CubCrafters XCub
+DC-10
+DC-10F
+E175
+E190
+F-14
+F-16
+F-22
+F/A-18E Super Hornet
+MD-11
+MD-11F
+P-38
+Piper PA28 Archer
+Spitfire
+TBM-930

@@ -1,0 +1,64 @@
+name: Windows build
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  release:
+    types: [published]
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build self-contained app
+        shell: pwsh
+        run: ./build.ps1 -Output ./publish/FlightGuard-v0.5-Windows
+      - name: Verify flight and cabin logic
+        shell: pwsh
+        run: |
+          $app = Join-Path $PWD 'publish/FlightGuard-v0.5-Windows/FlightGuard.exe'
+          $report = Join-Path $PWD 'publish/FlightGuard-v0.5-Windows/self-test-results.txt'
+          $check = Start-Process -FilePath $app -ArgumentList @('--self-test', ('"'+$report+'"')) -WindowStyle Hidden -Wait -PassThru
+          Get-Content -LiteralPath $report
+          if ($check.ExitCode -ne 0) { throw 'Self-tests failed' }
+      - name: Fetch pinned licensed recordings
+        shell: pwsh
+        run: |
+          python ./fetch_sounds.py ./publish/FlightGuard-v0.5-Windows
+          if ($LASTEXITCODE -ne 0) { throw 'Recording fetch failed' }
+          $app = Join-Path $PWD 'publish/FlightGuard-v0.5-Windows/FlightGuard.exe'
+          $target = Join-Path $PWD 'publish/FlightGuard-v0.5-Windows'
+          $reference = Join-Path $PWD 'aircraft-reference.txt'
+          $coverage = Start-Process -FilePath $app -ArgumentList @('--export-coverage', ('"'+$target+'"'), ('"'+$reference+'"')) -WindowStyle Hidden -Wait -PassThru
+          if ($coverage.ExitCode -ne 0) { throw 'Coverage export failed' }
+      - name: Package
+        shell: pwsh
+        run: |
+          $pdb = 'publish/FlightGuard-v0.5-Windows/FlightGuard.pdb'
+          if (Test-Path -LiteralPath $pdb) { Remove-Item -LiteralPath $pdb }
+          Compress-Archive -LiteralPath 'publish/FlightGuard-v0.5-Windows' -DestinationPath 'publish/FlightGuard-v0.5-Windows.zip'
+          $hash = Get-FileHash -LiteralPath 'publish/FlightGuard-v0.5-Windows.zip' -Algorithm SHA256
+          ($hash.Hash.ToLower()+'  FlightGuard-v0.5-Windows.zip') | Set-Content -LiteralPath 'publish/SHA256SUMS.txt'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FlightGuard-v0.5-Windows
+          path: |
+            publish/FlightGuard-v0.5-Windows.zip
+            publish/SHA256SUMS.txt
+      - name: Attach release files
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        shell: pwsh
+        run: gh release upload $env:RELEASE_TAG 'publish/FlightGuard-v0.5-Windows.zip' 'publish/SHA256SUMS.txt' --repo $env:GITHUB_REPOSITORY --clobber
