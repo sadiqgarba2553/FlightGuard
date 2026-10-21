@@ -8,7 +8,7 @@ public static class Coverage
     public static int Export(string root,string reference)
     {
         string Cell(string value)=>"\""+value.Replace("\"","\"\"")+"\"";
-        string? Source(string profile,string cue)=>Catalog.SoundFolders(profile).FirstOrDefault(folder=>File.Exists(Path.Combine(root,"Sounds",folder,cue+".wav")));
+        string? Source(string profile,string cue){string? file=VoiceRouting.Resolve(root,new(),profile,Catalog.Get(cue));return file==null?null:Path.GetFileName(Path.GetDirectoryName(file));}
         var text=new StringBuilder("Cue,Label,Trigger group,"+string.Join(",",Catalog.Profiles.Select(Cell))+"\n");
         foreach(var cue in Catalog.All)text.AppendLine(string.Join(",",new[]{cue.Id,cue.Text,cue.Group}.Concat(Catalog.Profiles.Select(p=>Source(p,cue.Id)??"Missing · silent")).Select(Cell)));
         File.WriteAllText(Path.Combine(root,"sound-coverage.csv"),text.ToString(),Encoding.UTF8);

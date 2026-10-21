@@ -1,3 +1,13 @@
+# 0.7.0 — Aircraft voices and Voice Studio
+
+- Add per-aircraft GPWS/co-pilot/cabin routing and independent levels.
+- Add background voice inventory, source/licence/hash and duration details, A/B compare, search/filters and coverage CSV export.
+- Add validated personal WAV mapping/metadata import, backups/undo and template export; block imports while connected/replaying.
+- Add editable/suggested height schedules including optional 5 ft, and routine crew quieting on final.
+- Add 72 pinned model mappings: 269 total, 17 repair packs and 266 downloadable originals. Identify identical source bytes rather than assuming unique OEM voices.
+- Avoid automatic A320 routing for A220; preserve labelled fallbacks and disclose incomplete 757/A220/A350 coverage.
+- 160 logic checks plus full voice inventory, 269 audio, native priority and isolated replay checks.
+
 # 0.6.0 — Earlier, context-aware terrain and configuration warnings
 
 - Add GPS-based forward terrain monitoring with a cached elevation corridor, configurable 60-second horizon, validity checks and explicit unavailable status.

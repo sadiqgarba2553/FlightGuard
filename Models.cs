@@ -36,6 +36,7 @@ public sealed class Settings
     public int CalloutLeadMilliseconds { get; set; } = 80;
     public ApproachOptions Approach {get;set;}=new();
     public CabinOptions Cabin {get;set;}=new();
+    public VoiceOptions Voices {get;set;}=new();
     public bool AutoRecord {get;set;}=true;
     public bool ExtraCrew {get;set;}=true;
     public static Settings Copy(Settings settings)=>JsonSerializer.Deserialize<Settings>(JsonSerializer.Serialize(settings))!;
@@ -62,7 +63,7 @@ public sealed class Settings
         if(TerrainLookAheadSeconds<15||TerrainLookAheadSeconds>90)throw new ArgumentException("Terrain look-ahead must be 15–90 seconds.");
         if(PollMilliseconds<50 || PollMilliseconds>500 || CalloutLeadMilliseconds<0 || CalloutLeadMilliseconds>250) throw new ArgumentException("Polling must be 50–500 ms; timing compensation 0–250 ms.");
         if(Profile!="Auto"&&!Catalog.Profiles.Contains(Profile))throw new ArgumentException("Select Auto or a listed aircraft/manufacturer sound profile.");
-        Approach ??=new(); Approach.Validate(); Cabin ??=new();Cabin.Validate();
+        Approach ??=new(); Approach.Validate(); Cabin ??=new();Cabin.Validate();Voices??=new();Voices.Validate();
         Volume = Math.Clamp(Volume, 0, 100);
         DisabledSounds ??= new();
     }
@@ -128,7 +129,7 @@ public static class Catalog
             new("deboarding","Deboarding ambience","Ambience",4), new("gpws-test", "GPWS recording test sequence", "Test")
         };
         foreach (int n in new[] { 2500, 2000, 1000, 500, 400, 300, 200, 100, 50, 40, 30, 20, 10, 5 })
-            a.Add(new("altitude-" + n, Number(n), n==5?"Manual preview":"Heights", 60));
+            a.Add(new("altitude-" + n, Number(n), "Heights", 60));
         return a;
     }
     private static string Number(int n) => n switch { 2500 => "Twenty five hundred", 2000 => "Two thousand", 1000 => "One thousand", 500 => "Five hundred", 400 => "Four hundred", 300 => "Three hundred", 200 => "Two hundred", 100 => "One hundred", 50 => "Fifty", 40 => "Forty", 30 => "Thirty", 20 => "Twenty", 10 => "Ten", _ => "Five" };

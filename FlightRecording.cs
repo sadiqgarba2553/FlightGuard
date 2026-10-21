@@ -54,7 +54,7 @@ public sealed class FlightRecorder
             }catch(Exception ex){Error=ex.Message;queue.Writer.TryComplete();if(ReferenceEquals(channel,queue))channel=null;}
         });
         writers.Add(writer);
-        Record(new(){Kind="session",Aircraft=aircraft,Settings=Settings.Copy(settings),Note="FlightGuard 0.6; UTC timestamps; frame units feet/knots/fpm/degrees; local recording"});
+        Record(new(){Kind="session",Aircraft=aircraft,Settings=Settings.Copy(settings),Note="FlightGuard 0.7; UTC timestamps; frame units feet/knots/fpm/degrees; local recording"});
         return Task.CompletedTask;
     }
     public void Record(FlightEvent e) {

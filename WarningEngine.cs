@@ -104,7 +104,7 @@ public sealed class WarningEngine
             if (s.Heights)
             {
                 // Only the most recent height is useful when one sample spans several thresholds.
-                var crossed = new[] {2500, 2000, 1000, 500, 400, 300, 200, 100, 50, 40, 30, 20, 10}.Where(n => Cross(n) && !once.Contains("altitude-" + n)).ToList();
+                var crossed = s.Voices.Schedule(f.Aircraft).Where(n => Cross(n) && !once.Contains("altitude-" + n)).ToList();
                 foreach (int n in crossed.SkipLast(1)) once.Add("altitude-" + n);
                 if (crossed.Count > 0) Add("altitude-" + crossed.Last());
                 if (s.Minimums > 0 && Cross(s.Minimums + 100)) Add("approaching-minimums");
@@ -115,7 +115,7 @@ public sealed class WarningEngine
         // Re-arm approach announcements after a sustained climb above each threshold + 150 ft.
         if (!f.Ground && f.Vs > 300)
         {
-            foreach (int n in new[] {2500,2000,1000,500,400,300,200,100,50,40,30,20,10}) if (f.Agl > n + 150) once.Remove("altitude-" + n);
+            foreach (int n in VoiceOptions.Heights) if (f.Agl > n + 150) once.Remove("altitude-" + n);
             if (f.Agl > s.Minimums + 250) { once.Remove("minimums"); once.Remove("approaching-minimums"); }
             if (f.Agl > 200) once.Remove("retard");
         }

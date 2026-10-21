@@ -109,7 +109,7 @@ public static class SelfTests
         Test("Fragmented TCP server: altitude feet, speed SI, read-only requests", () => ProtocolTest().GetAwaiter().GetResult());
         Test("Connect 500-ft AGL stays 500 ft, not 1640 ft", () => ProtocolTest(500f,1500f).GetAwaiter().GetResult());
         Test("Connect 50-ft AGL stays 50 ft near touchdown", () => ProtocolTest(50f,1050f).GetAwaiter().GetResult());
-        PhaseTests.Run(Test);FeatureTests.Run(Test);CabinTests.Run(Test);GpwsContextTests.Run(Test);ForwardTerrainTests.Run(Test);
+        VoiceTests.Run(Test);PhaseTests.Run(Test);FeatureTests.Run(Test);CabinTests.Run(Test);GpwsContextTests.Run(Test);ForwardTerrainTests.Run(Test);
         results.Insert(0, $"FlightGuard self-tests: {passed} passed, {failed} failed · {DateTime.UtcNow:O}");
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(output))!);File.WriteAllLines(output,results);
         return failed==0?0:1;

@@ -16,6 +16,7 @@ public static class Program
         if(args.Length>1 && args[0]=="--make-demo-recording"){FeatureTests.WriteDemo(args[1]);return 0;}
         if(args.Length>1 && args[0]=="--verify-audio-priority")return AudioPriorityVerification.Run(args[1]);
         if(args.Length>2 && args[0]=="--export-coverage")return Coverage.Export(args[1],args[2]);
+        if(args.Length>2 && args[0]=="--verify-voices")return VoiceVerification.Run(args[1],args[2]);
         if(args.Length>2 && args[0]=="--verify-terrain-data")return TerrainDataVerification.Run(args[1],args[2]).GetAwaiter().GetResult();
         var app = new Application { ShutdownMode = ShutdownMode.OnMainWindowClose };
         app.DispatcherUnhandledException += (_, e) => {
@@ -34,6 +35,7 @@ public static class Program
                 window.RenderSnapshot(frame,args[2]);window.CloseForRender();return 0;
             }
             if(args.Length>2 && args[0]=="--render-tools"){window.RenderTools(args[1],int.Parse(args[2]));window.CloseForRender();return 0;}
+            if(args.Length>2 && args[0]=="--render-voices"){window.RenderVoices(args[1],int.Parse(args[2]));window.CloseForRender();return 0;}
             if (args.Length > 0 && args[0] == "--render") {
                 window.Render(args.Length > 1 ? args[1] : Path.Combine(AppContext.BaseDirectory, "preview.png"), args.Length > 2 ? int.Parse(args[2]) : 0); window.CloseForRender(); return 0;
             }

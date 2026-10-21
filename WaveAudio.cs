@@ -130,6 +130,7 @@ public sealed class CueQueue
     public void Suppress(int priority)=>pending.RemoveAll(x=>x.Cue.Priority<priority);
     public void WarningState(string active)=>pending.RemoveAll(x=>x.Family==null&&Warning(x.Cue)&&x.Cue.Id!=active);
     public void CancelApproach()=>pending.RemoveAll(x=>x.Family==null && (x.Cue.Group is "Heights" or "Approach"));
+    public void CancelRoutineCrew()=>pending.RemoveAll(x=>x.Family==null&&x.Cue.Group=="Crew"&&x.Cue.Priority<50);
     public void CancelCabin(Func<string,bool> allowed)=>pending.RemoveAll(x=>x.Family==null&&Cabin(x.Cue)&&!allowed(x.Cue.Id));
     public void Clear()=>pending.Clear();
 }

@@ -48,7 +48,7 @@ public static class SoundPackManager
         string stagingRoot=Path.Combine(appRoot,"Data","PackDownloads");Directory.CreateDirectory(stagingRoot);
         string stage=Inside(stagingRoot,Path.Combine(stagingRoot,Guid.NewGuid().ToString("N")));Directory.CreateDirectory(stage);
         if(Directory.Exists(target))CopyTree(target,stage);
-        using var handler=new HttpClientHandler{AllowAutoRedirect=false};using var client=new HttpClient(handler){Timeout=TimeSpan.FromSeconds(45),MaxResponseContentBufferSize=20*1024*1024};client.DefaultRequestHeaders.UserAgent.ParseAdd("FlightGuard/0.5");
+        using var handler=new HttpClientHandler{AllowAutoRedirect=false};using var client=new HttpClient(handler){Timeout=TimeSpan.FromSeconds(45),MaxResponseContentBufferSize=20*1024*1024};client.DefaultRequestHeaders.UserAgent.ParseAdd("FlightGuard/0.7");
         using var slots=new SemaphoreSlim(4);int done=0,downloaded=0;
         await Task.WhenAll(pack.Assets.Select(async a=>{
             await slots.WaitAsync(token);try{

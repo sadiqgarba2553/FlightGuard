@@ -22,12 +22,12 @@ jobs:
           python-version: '3.12'
       - name: Build self-contained app
         shell: pwsh
-        run: ./build.ps1 -Output ./publish/FlightGuard-v0.6-Windows
+        run: ./build.ps1 -Output ./publish/FlightGuard-v0.7-Windows
       - name: Verify flight and cabin logic
         shell: pwsh
         run: |
-          $app = Join-Path $PWD 'publish/FlightGuard-v0.6-Windows/FlightGuard.exe'
-          $report = Join-Path $PWD 'publish/FlightGuard-v0.6-Windows/self-test-results.txt'
+          $app = Join-Path $PWD 'publish/FlightGuard-v0.7-Windows/FlightGuard.exe'
+          $report = Join-Path $PWD 'publish/FlightGuard-v0.7-Windows/self-test-results.txt'
           $check = Start-Process -FilePath $app -ArgumentList @('--self-test', ('"'+$report+'"')) -WindowStyle Hidden -Wait -PassThru
           Get-Content -LiteralPath $report
           if ($check.ExitCode -ne 0) { throw 'Self-tests failed' }
@@ -36,26 +36,29 @@ jobs:
         run: |
           python -m pip install -r ./requirements-audio.txt
           if ($LASTEXITCODE -ne 0) { throw 'Audio decoder dependency install failed' }
-          python ./fetch_sounds.py ./publish/FlightGuard-v0.6-Windows
+          python ./fetch_sounds.py ./publish/FlightGuard-v0.7-Windows
           if ($LASTEXITCODE -ne 0) { throw 'Recording fetch failed' }
-          $app = Join-Path $PWD 'publish/FlightGuard-v0.6-Windows/FlightGuard.exe'
-          $target = Join-Path $PWD 'publish/FlightGuard-v0.6-Windows'
+          $app = Join-Path $PWD 'publish/FlightGuard-v0.7-Windows/FlightGuard.exe'
+          $target = Join-Path $PWD 'publish/FlightGuard-v0.7-Windows'
           $reference = Join-Path $PWD 'aircraft-reference.txt'
           $coverage = Start-Process -FilePath $app -ArgumentList @('--export-coverage', ('"'+$target+'"'), ('"'+$reference+'"')) -WindowStyle Hidden -Wait -PassThru
           if ($coverage.ExitCode -ne 0) { throw 'Coverage export failed' }
+          $voiceReport = Join-Path $target 'voice-verification.json'
+          $voices = Start-Process -FilePath $app -ArgumentList @('--verify-voices', ('"'+$target+'"'), ('"'+$voiceReport+'"')) -WindowStyle Hidden -Wait -PassThru
+          if ($voices.ExitCode -ne 0) { throw 'Aircraft voice inventory failed' }
       - name: Package
         shell: pwsh
         run: |
-          $pdb = 'publish/FlightGuard-v0.6-Windows/FlightGuard.pdb'
+          $pdb = 'publish/FlightGuard-v0.7-Windows/FlightGuard.pdb'
           if (Test-Path -LiteralPath $pdb) { Remove-Item -LiteralPath $pdb }
-          Compress-Archive -LiteralPath 'publish/FlightGuard-v0.6-Windows' -DestinationPath 'publish/FlightGuard-v0.6-Windows.zip'
-          $hash = Get-FileHash -LiteralPath 'publish/FlightGuard-v0.6-Windows.zip' -Algorithm SHA256
-          ($hash.Hash.ToLower()+'  FlightGuard-v0.6-Windows.zip') | Set-Content -LiteralPath 'publish/SHA256SUMS.txt'
+          Compress-Archive -LiteralPath 'publish/FlightGuard-v0.7-Windows' -DestinationPath 'publish/FlightGuard-v0.7-Windows.zip'
+          $hash = Get-FileHash -LiteralPath 'publish/FlightGuard-v0.7-Windows.zip' -Algorithm SHA256
+          ($hash.Hash.ToLower()+'  FlightGuard-v0.7-Windows.zip') | Set-Content -LiteralPath 'publish/SHA256SUMS.txt'
       - uses: actions/upload-artifact@v4
         with:
-          name: FlightGuard-v0.6-Windows
+          name: FlightGuard-v0.7-Windows
           path: |
-            publish/FlightGuard-v0.6-Windows.zip
+            publish/FlightGuard-v0.7-Windows.zip
             publish/SHA256SUMS.txt
       - name: Attach release files
         if: github.event_name == 'release'
@@ -63,4 +66,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         shell: pwsh
-        run: gh release upload $env:RELEASE_TAG 'publish/FlightGuard-v0.6-Windows.zip' 'publish/SHA256SUMS.txt' --repo $env:GITHUB_REPOSITORY --clobber
+        run: gh release upload $env:RELEASE_TAG 'publish/FlightGuard-v0.7-Windows.zip' 'publish/SHA256SUMS.txt' --repo $env:GITHUB_REPOSITORY --clobber

@@ -62,7 +62,7 @@ for family, mapping, repo, revision, folder, license_name in [
     if family == "Generic":
         attribution += "\nFlightGear fgdata MK VIII GPWS collection. This is the shared Honeywell-style simulator fallback; it is not a verified recording set for every Boeing model.\n"
     if family == "McDonnell Douglas":
-        attribution += "\nOctal450 MD-11 project contributors. CAWS recordings are specific to that simulator project, not a complete certified MD-80/DC-10/MD-11 sound set. Missing warnings use Generic GPWS or speech.\n"
+        attribution += "\nOctal450 MD-11 project contributors. CAWS recordings are specific to that simulator project, not a complete certified MD-80/DC-10/MD-11 sound set. Missing warnings use shared recorded GPWS; unavailable clips stay silent.\n"
     (out / "ATTRIBUTION.md").write_text(attribution, encoding="utf-8")
 
 def fetch(job):

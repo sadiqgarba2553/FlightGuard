@@ -38,6 +38,7 @@ public sealed class MainWindow : Window
     private readonly ForwardTerrainService forwardTerrain=new(Path.Combine(Settings.DataFolder,"TerrainCache"));
     private ForwardTerrainAssessment? replayAhead;
     private FlightToolsPanel tools=null!;
+    private VoiceStudio studio=null!;
     private bool loadingSettings,replaying,recordingSuppressed;
     private Settings? beforeReplay;
     private bool muteBeforeReplay;
@@ -77,6 +78,8 @@ public sealed class MainWindow : Window
         audio.CabinAllowed=cabin.Allowed;
         audio.CabinPreviewAllowed=()=>latest==null||!latest.Active||!cabin.Quiet;
         Get<TabControl>("Tabs").Items.Add(tools.Tab);
+        studio=new(()=>settings,SaveSettings,()=>session==null&&!replaying&&!demo&&!tools.Installing,()=>{audio.Reload();RefreshSounds();UpdateProfile();},AddLog,(cue,profile)=>audio.Preview(cue,profile));
+        Get<TabControl>("Tabs").Items.Add(studio.Tab);
         landingAnalyzer.Completed=result=>{string? path=null;if(!replaying&&!demo){try{path=LandingAnalyzer.Save(result,Path.Combine(Settings.DataFolder,"Landings"));AddLog("Landing report saved: "+Path.GetFileName(path));}catch(Exception ex){AddLog("Landing report could not be saved: "+ex.Message);}}tools.Landing(result,path);};
         audio.PlaybackRecorded=stamp=>{if(!replaying&&!demo)recorder.Record(new(){Kind="audio",Time=stamp.Time,Playback=stamp});};
         audio.Notice = AddLog;
@@ -130,7 +133,7 @@ public sealed class MainWindow : Window
         Get<Slider>("Volume").Value = settings.Volume;
         Get<TextBox>("PollMs").Text=settings.PollMilliseconds.ToString(); Get<TextBox>("LeadMs").Text=settings.CalloutLeadMilliseconds.ToString();
         Get<ComboBox>("PackFamily").ItemsSource = Catalog.Profiles; Get<ComboBox>("PackFamily").SelectedItem=family;
-        tools.Load(settings);loadingSettings=false;
+        tools.Load(settings);studio.Load(settings.Voices);loadingSettings=false;
     }
     private bool SaveSettings()
     {
@@ -144,7 +147,7 @@ public sealed class MainWindow : Window
                 ForwardTerrain=On("ForwardTerrain"),TerrainLookAheadSeconds=checked((int)Num("TerrainAheadSeconds")), GpwsLandingFlapState=checked((int)Num("LandingFlapState")), TerrainSeconds = Num("TerrainTime"), BankAngle = Num("Bank"), GearHeight = Num("GearHeight"), FlapsHeight = Num("FlapHeight"),
                 SpeedsArmed = On("Armed"), Warnings = On("Warnings"), Heights = On("Heights"), Crew = On("Crew"), Terrain = On("Terrain"), GearWarnings = On("GearWarnings"), FlapWarnings = On("FlapWarnings"), Retard = On("Retard"),
                 Volume = (int)Get<Slider>("Volume").Value, PollMilliseconds=(int)Num("PollMs"), CalloutLeadMilliseconds=(int)Num("LeadMs"),
-                Cabin=tools.ReadCabin(), Approach=tools.ReadApproach(), AutoRecord=tools.AutoRecord, ExtraCrew=tools.ExtraCrew,
+                Voices=studio.Read(), Cabin=tools.ReadCabin(), Approach=tools.ReadApproach(), AutoRecord=tools.AutoRecord, ExtraCrew=tools.ExtraCrew,
                 DisabledSounds = rows.Where(x => !x.Enabled).Select(x => x.Id).ToList()
             };
             if(Num("TerrainAheadSeconds")!=next.TerrainLookAheadSeconds)throw new ArgumentException("Look-ahead seconds must be an integer.");
@@ -153,7 +156,7 @@ public sealed class MainWindow : Window
             if(latest!=null&&!demo){aircraftPreferences.Save(latest.Aircraft,settings);tools.SetAircraft(latest.Aircraft,true);}else if(!demo)defaults=Settings.Copy(settings);
             if(!settings.AutoRecord&&recorder.IsRecording){recordingSuppressed=true;_=recorder.Stop("Automatic recording disabled");}
             recorder.Record(new(){Kind="settings",Settings=Settings.Copy(settings)});
-            audio.Configure(settings, family); AddLog("Settings applied. " + (settings.SpeedsArmed ? "V-speeds ARMED for this flight." : "V-speeds disarmed.")); return true;
+            audio.Configure(settings, family);studio.Scan();RefreshSounds();UpdateProfile(); AddLog("Settings applied. " + (settings.SpeedsArmed ? "V-speeds ARMED for this flight." : "V-speeds disarmed.")); return true;
         } catch (Exception e) { MessageBox.Show(this, e.Message, "Check settings", MessageBoxButton.OK, MessageBoxImage.Information); return false; }
     }
     private async Task Discover()
@@ -227,7 +230,7 @@ public sealed class MainWindow : Window
         latest = f; string nextFamily = settings.Profile == "Auto" ? Catalog.AircraftProfile(f.Aircraft) : settings.Profile;
         if (family != nextFamily || changed) {
             family = nextFamily; engine.Reset(); audio.Stop();
-            Get<ComboBox>("PackFamily").SelectedItem = family;
+            Get<ComboBox>("PackFamily").SelectedItem = family;studio.SetAircraft(family);
             if(!replaying){settings.SpeedsArmed = false; Get<CheckBox>("Armed").IsChecked = false;}
             audio.Configure(settings, family); RefreshSounds();
             AddLog("Aircraft/profile changed. Recheck and re-arm V-speeds.");
@@ -239,6 +242,7 @@ public sealed class MainWindow : Window
         var cues = engine.Update(f, settings, family,!replaying,ahead);
         cues.AddRange(extraCrew.Update(f,engine.Phase,settings.ExtraCrew&&settings.Crew));
         cues.AddRange(cabin.Update(f,engine.Phase,settings.Cabin,engine.ActiveWarning));
+        if(settings.Voices.SuppressRoutineCrewOnFinal&&engine.ApproachAudioAllowed&&f.Agl<500)cues.RemoveAll(c=>c.Group=="Crew"&&c.Priority<50);
         tools.UpdateCabin(cabin.Status);
         var assessment=approach.Update(f,settings.Approach,engine.ApproachAudioAllowed);
         if(assessment.State=="Unstable"&&approachState!="Unstable"&&settings.Approach.CautionTone&&engine.ActiveWarning==""&&(f.Time-lastApproachTone).TotalSeconds>15){cues.Add(Catalog.Get("master-caution"));lastApproachTone=f.Time;}
@@ -252,6 +256,7 @@ public sealed class MainWindow : Window
         else {
             audio.SynchronizeWarning(engine.ActiveWarning);
             audio.SynchronizeApproach(engine.ApproachAudioAllowed);
+            audio.SynchronizeRoutineCrew(!(settings.Voices.SuppressRoutineCrewOnFinal&&engine.ApproachAudioAllowed&&f.Agl<500));
             audio.SynchronizeCabin();
             if (engine.ActiveWarning != "") audio.SuppressLowerThan(70);
             audio.Enqueue(cues);
@@ -312,10 +317,12 @@ public sealed class MainWindow : Window
         System.IO.File.WriteAllText(output,System.Text.Json.JsonSerializer.Serialize(new{Status="PASS",LiveConnections=ConnectClient.ConnectionAttempts-before,TerrainRequests=TerrainTiles.NetworkRequests-terrainBefore,RecorderActive=recorder.IsRecording,LiveSettingsRestored=true,Frames=FlightRecorder.Read(input).Count(e=>e.Frame!=null)},new System.Text.Json.JsonSerializerOptions{WriteIndented=true}));
     }
     public void RenderTools(string path,int page){tools.SelectPage(page);Render(path,4);}
+    public void RenderVoices(string path,int page){studio.RenderPage(page);Render(path,5);}
     public void CloseForRender(){shuttingDown=true;watchdog.Stop();tools.Close();forwardTerrain.Dispose();audio.Dispose();Close();}
 
     private void Import()
     {
+        if(session!=null||replaying||demo||tools.Installing){AddLog("Disconnect before importing recordings.");return;}
         string selected = Get<ComboBox>("PackFamily").SelectedItem?.ToString() ?? "Generic";
         using var dialog = new System.Windows.Forms.FolderBrowserDialog { Description = "Choose a sound pack with cue-id.wav files or pack.json" };
         if (dialog.ShowDialog() != System.Windows.Forms.DialogResult.OK) return;
@@ -432,7 +439,7 @@ public sealed class MainWindow : Window
    <TextBox Grid.Row="2" x:Name="Log" IsReadOnly="True" VerticalContentAlignment="Top" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" FontFamily="Consolas" FontSize="12" Margin="0,0,0,12"/>
   </Grid></TabItem>
  </TabControl>
- <TextBlock Grid.Row="3" Text="FLIGHTGUARD v0.6   ·   sadiq_ibraheem / INFINITE FLIGHT COMMUNITY   ·   SIMULATOR USE ONLY" HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="#526D8E" FontSize="10"/>
+ <TextBlock Grid.Row="3" Text="FLIGHTGUARD v0.7   ·   sadiq_ibraheem / INFINITE FLIGHT COMMUNITY   ·   SIMULATOR USE ONLY" HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="#526D8E" FontSize="10"/>
 </Grid>
 """;
 }
